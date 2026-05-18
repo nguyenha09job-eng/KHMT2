@@ -795,7 +795,7 @@ BEGIN
     LEFT JOIN service_catalog sc ON s.service_type_id = sc.service_type_id
     WHERE b.booking_status_id = 2
       AND DATE(b.check_in)  <= p_date
-      AND DATE(b.check_out) >= p_date
+      AND DATE(b.check_out) > p_date
     GROUP BY b.booking_id, p.pet_name, p.species, p.weight,
              p.health_condition, p.behaviour_note, p.special_requirement,
              r.room_id, rt.type_name, r.camera_url,
@@ -863,7 +863,7 @@ INNER JOIN rooms r       ON b.room_id      = r.room_id
 INNER JOIN room_types rt ON r.room_type_id = rt.room_type_id
 WHERE b.booking_status_id = 2
   AND DATE(b.check_in)  <= CURRENT_DATE
-  AND DATE(b.check_out) >= CURRENT_DATE;
+  AND DATE(b.check_out) > CURRENT_DATE;
 
 -- =====================================================
 -- 19. INITIAL DEMO DATA (bookings 1-4, manual)
@@ -1418,5 +1418,4 @@ GROUP BY bs.status_name;
 SELECT '✅ INSERT DATA v5 FIXED COMPLETE - 2026-02-19 to 2026-05-19' AS final_status;
 
 SELECT * from customer_subscriptions;
-
 

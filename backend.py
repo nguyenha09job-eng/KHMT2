@@ -36,9 +36,11 @@ class DashboardBackend:
             SELECT COUNT(*) AS cnt
             FROM bookings b
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
-              AND b.check_in <= NOW()
-              AND b.check_out >= NOW()
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) > CURDATE()
+              AND LOWER(p.species) IN ('dog', 'cat')
             """
         )
         dogs = self.db.fetch_one(
@@ -48,8 +50,8 @@ class DashboardBackend:
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
-              AND b.check_in <= NOW()
-              AND b.check_out >= NOW()
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) > CURDATE()
               AND LOWER(p.species) = 'dog'
             """
         )
@@ -60,8 +62,8 @@ class DashboardBackend:
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
-              AND b.check_in <= NOW()
-              AND b.check_out >= NOW()
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) > CURDATE()
               AND LOWER(p.species) = 'cat'
             """
         )
