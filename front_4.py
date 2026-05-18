@@ -1,538 +1,355 @@
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
+import tkinter as tk
+from PIL import Image, ImageTk, ImageDraw
+import os
 import sys
+from datetime import datetime
 
 
-class HistoryApp(QMainWindow):
+def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
+    d = 2 * radius
+    kwargs["outline"] = kwargs.get("fill", "")
+    items = []
+    items.append(cv.create_rectangle(x1 + radius, y1, x2 - radius, y2, **kwargs))
+    items.append(cv.create_rectangle(x1, y1 + radius, x2, y2 - radius, **kwargs))
+    items.append(cv.create_arc(x1, y1, x1 + d, y1 + d, start=90, extent=90, style='pieslice', **kwargs))
+    items.append(cv.create_arc(x2 - d, y1, x2, y1 + d, start=0, extent=90, style='pieslice', **kwargs))
+    items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
+    items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
+    return tuple(items)
+
+
+class BookingHistory(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.title("Pet&Bed - Booking History")
+        self.attributes("-fullscreen", True)
+        self.configure(bg="#A8D3CF")
+        self.update_idletasks()
 
+        self.W = self.winfo_width()
+        self.H = self.winfo_height()
+        self.BASE_W = 1200.0
+        self.BASE_H = 850.0
+        self._s = self.W / self.BASE_W
+        s = self._s
+        self.Y_OFF = 20
 
-        # ================= SETUP CƠ BẢN =================
-        self.setWindowTitle("Pet&Bed History")
-        self.resize(1920, 1080)
-        self.setMinimumSize(1700, 950)
+        # Colors
+        self.C_BG = "#A8D3CF"
+        self.C_SIDEBAR = "#FFFFFF"
+        self.C_TEXT = "#4A3525"
+        self.C_TEXT_LIGHT = "#7A685F"
+        self.C_WHITE = "#FFFFFF"
+        self.C_ACTIVE = "#68BBB2"
+        self.C_CARD_BG = "#FFFFFF"
+        self.C_DIVIDER = "#DDD8D2"
+        self.C_GREEN_CHIP_BG = "#D4EDBA"
+        self.C_GREEN_CHIP_TEXT = "#5A8A1A"
+        self.C_PINK_CHIP_BG = "#F8D7E0"
+        self.C_PINK_CHIP_TEXT = "#C05070"
+        self.C_FILTER_BORDER = "#C8C2BC"
 
+        # Fonts
+        self.F_LOGO = ("Arial Rounded MT Bold", max(16, int(40 * s)), "bold")
+        self.F_NAV = ("Baghdad", max(10, int(18 * s)))
+        self.F_TITLE = ("Arial Rounded MT Bold", max(10, int(18 * s)), "bold")
+        self.F_DATE = ("Baghdad", max(10, int(18 * s)))
+        self.F_SECTION = ("Arial Rounded MT Bold", max(14, int(28 * s)), "bold")
+        self.F_TABLE_HEAD = ("Baghdad", max(10, int(16 * s)), "bold")
+        self.F_TABLE_BODY = ("Baghdad", max(10, int(15 * s)))
+        self.F_CHIP = ("Baghdad", max(9, int(13 * s)))
+        self.F_TOGGLE_BTN = ("Baghdad", max(9, int(14 * s)), "bold")
+        self.F_SEARCH = ("Baghdad", max(10, int(16 * s)))
+        self.F_FILTER = ("Baghdad", max(10, int(15 * s)))
 
-        # Cài đặt Font Baghdad mặc định cho toàn bộ nội dung
-        self.setStyleSheet("""
-            QWidget {
-                background: #A8D3CF;
-                color: #5A392F;
-                font-family: 'Baghdad', 'Segoe UI', sans-serif;
-            }
-            QScrollArea {
-                background: transparent;
-                border: none;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: rgba(255, 255, 255, 0.3);
-                width: 14px;
-                border-radius: 7px;
-            }
-            QScrollBar::handle:vertical {
-                background: #68BBB2;
-                min-height: 40px;
-                border-radius: 7px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #509E96;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                border: none;
-                background: none;
-            }
-        """)
+        self.images = []
 
+        # Layout
+        main = tk.Frame(self, bg=self.C_BG)
+        main.pack(fill=tk.BOTH, expand=True)
 
-        # ================= MAIN =================
-        main = QWidget()
-        self.setCentralWidget(main)
+        self.BASE_SIDE_W = 260
+        side_w = int(self.BASE_SIDE_W * s)
 
+        self.side_frame = tk.Frame(main, width=side_w, bg=self.C_BG)
+        self.side_frame.pack(side=tk.LEFT, fill=tk.Y)
+        self.side_frame.pack_propagate(False)
+        self.sidebar_canvas = tk.Canvas(self.side_frame, width=side_w, height=self.H,
+                                        bg=self.C_BG, highlightthickness=0)
+        self.sidebar_canvas.pack(fill=tk.BOTH, expand=True)
 
-        main_layout = QHBoxLayout(main)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self.content_container = tk.Frame(main, bg=self.C_BG)
+        self.content_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
+        scrollbar = tk.Scrollbar(self.content_container, orient=tk.VERTICAL)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # ================= SIDEBAR =================
-        sidebar = QFrame()
-        sidebar.setFixedWidth(290)
-        sidebar.setStyleSheet("""
-            QFrame {
-                background: #F8F8F8;
-                border: none;
-            }
-        """)
+        self.canvas = tk.Canvas(self.content_container, bg=self.C_BG, highlightthickness=0)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.configure(command=self.canvas.yview)
 
+        self.draw_sidebar()
+        self.sidebar_canvas.scale("all", 0, 0, s, s)
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, s, s)
 
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(22, 30, 22, 24)
-        sidebar_layout.setSpacing(14)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * s)))
 
-
-        # ================= LOGO =================
-        title = QLabel("Pet&Bed")
-        title.setStyleSheet("""
-            font-size: 48px;
-            font-weight: bold;
-            font-family: 'Arial Rounded MT Bold', 'Arial Rounded MT';
-            color: #5A392F;
-            padding-left: 6px;
-            background: transparent;
-        """)
-        sidebar_layout.addWidget(title)
-        sidebar_layout.addSpacing(20)
-
-
-        # ================= MENU =================
-        menus = ["Dashboard", "Care View", "Booking", "Rooms", "Customer & Pet", "Billing", "Staff", "Report"]
-
-
-        for text in menus:
-            btn = QPushButton(text)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(62)
-
-
-            # In đậm menu theo đúng chuẩn UI
-            if text == "Booking":
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background: #68BBB2;
-                        color: #3E2A24;
-                        border: none;
-                        border-radius: 22px;
-                        text-align: left;
-                        padding-left: 24px;
-                        font-size: 18px;
-                        font-weight: bold;
-                    }
-                """)
+        def _on_mw(event):
+            if sys.platform == "darwin":
+                self.canvas.yview_scroll(int(-event.delta), "units")
             else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background: white;
-                        color: #5A392F;
-                        border: 2px solid #D8CBC6;
-                        border-radius: 22px;
-                        text-align: left;
-                        padding-left: 24px;
-                        font-size: 18px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover {
-                        background: #F3E7EA;
-                    }
-                """)
-            sidebar_layout.addWidget(btn)
+                self.canvas.yview_scroll(int(-event.delta / 120), "units")
 
+        self.canvas.bind("<MouseWheel>", _on_mw, add="+")
+        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
+        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
+        self.bind("<Escape>", lambda e: self.destroy())
 
-        sidebar_layout.addStretch()
+    # ───────────────────── SIDEBAR ─────────────────────
+    def draw_sidebar(self):
+        cv = self.sidebar_canvas
+        _round_rect(cv, -80, 0, 250, 820, radius=30, fill=self.C_SIDEBAR, outline="")
+        cv.create_text(125, 70, text="Pet&Bed", font=self.F_LOGO, fill=self.C_TEXT)
 
+        nav_items = ["Dashboard", "Care View", "Booking", "Rooms",
+                     "Customer & Pet", "Billing", "Staff", "Report"]
+        y = 110
+        item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
-        # ================= LOGOUT =================
-        self.logout_btn = QPushButton("Log out")
-        self.logout_btn.setCursor(Qt.PointingHandCursor)
-        self.logout_btn.setFixedHeight(62)
-        self.logout_btn.setStyleSheet("""
-            QPushButton {
-                background: #5A392F;
-                color: white;
-                border: none;
-                border-radius: 22px;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #412820;
-            }
-        """)
-       
-        # Thêm sự kiện THOÁT ứng dụng thực sự
-        self.logout_btn.clicked.connect(self.logout_action)
-       
-        sidebar_layout.addWidget(self.logout_btn)
-        main_layout.addWidget(sidebar)
+        for i, item in enumerate(nav_items):
+            fill = self.C_ACTIVE if i == 2 else "#efefef"
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+            y += item_h + gap
 
-
-        # ================= CONTENT AREA =================
-        content_wrapper = QWidget()
-        content_wrapper.setStyleSheet("background: transparent;")
-       
-        layout = QVBoxLayout(content_wrapper)
-        layout.setContentsMargins(40, 30, 40, 30)
-        layout.setSpacing(25)
-
-
-        # ================= TOPBAR =================
-        topbar = QFrame()
-        topbar.setFixedHeight(84)
-        topbar.setStyleSheet("""
-            QFrame {
-                background: #F8F8F8;
-                border-radius: 42px;
-            }
-        """)
-
-
-        top_layout = QHBoxLayout(topbar)
-        top_layout.setContentsMargins(35, 0, 15, 0)
-
-
-        # Trái Topbar
-        booking_label = QLabel("Booking")
-        booking_label.setStyleSheet("font-size: 26px; font-weight: bold; font-family: 'Arial Rounded MT Bold'; color: #5A392F; background: transparent;")
-       
-        date_label = QLabel("Tuesday, 06/05/2025")
-        # In đậm ngày tháng
-        date_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #5A392F; background: transparent;")
-
-
-        left_info = QHBoxLayout()
-        left_info.setSpacing(20)
-        left_info.addWidget(booking_label)
-        left_info.addWidget(date_label)
-       
-        left_widget = QWidget()
-        left_widget.setStyleSheet("background: transparent;")
-        left_widget.setLayout(left_info)
-
-
-        top_layout.addWidget(left_widget)
-        top_layout.addStretch()
-
-
-        # Tab Slider (Phải Topbar)
-        self.tab_container = QFrame()
-        self.tab_container.setFixedSize(430, 68)
-        self.tab_container.setStyleSheet("QFrame { background: transparent; border: none; }")
-
-
-        # Nền trượt (Slider)
-        self.slider = QFrame(self.tab_container)
-        self.slider.setGeometry(219, 6, 203, 56)
-        self.slider.setStyleSheet("QFrame { background: #5A392F; border-radius: 28px; }")
-
-
-        button_widget = QWidget(self.tab_container)
-        button_widget.setGeometry(0, 0, 430, 68)
-        button_layout = QHBoxLayout(button_widget)
-        button_layout.setContentsMargins(8, 6, 8, 6)
-        button_layout.setSpacing(0)
-
-
-        self.booking_btn = QPushButton("Bookings")
-        self.history_btn = QPushButton("History")
-
-
-        self.booking_btn.setCursor(Qt.PointingHandCursor)
-        self.history_btn.setCursor(Qt.PointingHandCursor)
-
-
-        self.booking_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: #5A392F; }")
-        self.history_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: white; }")
-
-
-        self.booking_btn.clicked.connect(lambda: self.switch_tab(0))
-        self.history_btn.clicked.connect(lambda: self.switch_tab(1))
-
-
-        button_layout.addWidget(self.booking_btn)
-        button_layout.addWidget(self.history_btn)
-
-
-        top_layout.addWidget(self.tab_container)
-        layout.addWidget(topbar)
-
-
-        # ================= TITLE =================
-        history_title = QLabel("History")
-        history_title.setStyleSheet("font-size: 52px; font-weight: bold; font-family: 'Arial Rounded MT Bold'; color: #4A3B32; background: transparent;")
-        layout.addWidget(history_title)
-
-
-        # ================= TOP SECTION (FILTER + IMAGE) =================
-        top_section = QHBoxLayout()
-        top_section.setSpacing(35)
-
-
-        # FILTER BOX
-        filter_box = QFrame()
-        filter_box.setFixedHeight(270)
-        filter_box.setStyleSheet("QFrame { background: #F8F8F8; border-radius: 30px; }")
-
-
-        filter_layout = QGridLayout(filter_box)
-        filter_layout.setContentsMargins(40, 30, 40, 30)
-        filter_layout.setHorizontalSpacing(30)
-        filter_layout.setVerticalSpacing(25)
-
-
-        filters = ["Check - in", "Check - out", "Staying", "Cancelled"]
-        positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
-
-
-        for text, pos in zip(filters, positions):
-            btn = QPushButton(text)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            # In đậm nút Filter
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: white;
-                    border: 2px solid #D8CBC6;
-                    border-radius: 28px;
-                    font-size: 24px;
-                    font-weight: bold;
-                    color: #5A392F;
-                }
-                QPushButton:hover {
-                    background: #F5EEEE;
-                }
-                QPushButton:checked {
-                    background: #68BBB2;
-                    color: white;
-                    border: none;
-                }
-            """)
-            filter_layout.addWidget(btn, *pos)
-
-
-        top_section.addWidget(filter_box, 1)
-
-
-        # IMAGE BOX
-        image_label = QLabel()
-        image_label.setFixedHeight(270)
-        image_label.setStyleSheet("QLabel { background: #F8F8F8; border-radius: 30px; }")
-       
-        img_path = r"C:\project cki khmt\meo.jpg"
-        pixmap = QPixmap(img_path)
-
-
-        if not pixmap.isNull():
-            rounded = QPixmap(pixmap.size())
-            rounded.fill(Qt.transparent)
-            painter = QPainter(rounded)
-            painter.setRenderHint(QPainter.Antialiasing)
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(rounded.rect()), 30, 30)
-            painter.setClipPath(path)
-            painter.drawPixmap(0, 0, pixmap)
-            painter.end()
-           
-            image_label.setPixmap(rounded)
-            image_label.setScaledContents(True)
+        # Side icon
+        _dir = os.path.dirname(__file__)
+        icon_path = os.path.join(_dir, "image", "turtle.png")
+        s = self._s
+        iw, ih = int(130 * s), int(130 * s)
+        sr = int(20 * s)
+        if os.path.exists(icon_path):
+            img = Image.open(icon_path).convert("RGBA")
         else:
-            image_label.setText("IMAGE NOT FOUND\n(meo.jpg)")
-            image_label.setAlignment(Qt.AlignCenter)
-            image_label.setStyleSheet("QLabel { background: #EAD7DC; border-radius: 30px; font-size: 24px; color: #5A392F; font-weight: bold; }")
+            img = Image.new("RGBA", (iw, ih), color="#CCCCCC")
+        img = img.resize((iw, ih), Image.Resampling.LANCZOS)
+        mask = Image.new("L", (iw, ih), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=sr, fill=255)
+        result = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+        result.paste(img, (0, 0), mask=mask)
+        icon_tk = ImageTk.PhotoImage(result)
+        self.images.append(icon_tk)
+        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
 
+        base_bottom = self.H / self._s
+        btn_h, btn_pad = 42, 25
+        btn_y2 = base_bottom - btn_pad
+        btn_y1 = btn_y2 - btn_h
+        _round_rect(cv, 30, btn_y1, 220, btn_y2, radius=btn_h // 2,
+                    fill=self.C_TEXT, outline="", tags="logout_btn")
+        cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
+                       font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
+        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
 
-        top_section.addWidget(image_label, 1)
-        layout.addLayout(top_section)
-
-
-        # ================= SEARCH BAR =================
-        search_frame = QFrame()
-        search_frame.setFixedHeight(75)
-        search_frame.setStyleSheet("QFrame { background: white; border-radius: 37px; }")
-
-
-        search_layout = QHBoxLayout(search_frame)
-        search_layout.setContentsMargins(35, 0, 30, 0)
-
-
-        search = QLineEdit()
-        search.setPlaceholderText("Search room_id")
-        # NỘI DUNG tìm kiếm để NORMAL
-        search.setStyleSheet("""
-            QLineEdit {
-                border: none;
-                background: transparent;
-                font-size: 22px;
-                font-weight: normal;
-                color: #5A392F;
-            }
-        """)
-
-
-        icon = QLabel("🔍")
-        icon.setStyleSheet("font-size: 28px; color: #5A392F; background: transparent; font-weight: bold;")
-
-
-        search_layout.addWidget(search)
-        search_layout.addWidget(icon)
-
-
-        layout.addWidget(search_frame)
-
-
-        # ================= TABLE =================
-        table_frame = QFrame()
-        table_frame.setStyleSheet("QFrame { background: #F8F8F8; border-radius: 30px; }")
-
-
-        table_layout = QVBoxLayout(table_frame)
-        table_layout.setContentsMargins(25, 20, 25, 25)
-
-
-        self.table = QTableWidget()
-        self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels(["#", "Pet", "Owner", "Check in", "Check out", "Room", "Service", "Status"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.setShowGrid(False)
-        self.table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-
-
-        # HEADER in đậm (bold) | NỘI DUNG BẢNG nét thường (normal)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background: transparent;
-                border: none;
-                color: #5A392F;
-                font-size: 20px;
-                font-weight: normal;
-            }
-            QHeaderView::section {
-                background: transparent;
-                border: none;
-                border-bottom: 3px solid #E7D7D2;
-                padding: 18px;
-                font-size: 20px;
-                font-weight: bold;
-                font-family: 'Arial Rounded MT Bold';
-                color: #4A3B32;
-            }
-            QTableWidget::item {
-                border-bottom: 1px solid #E7D7D2;
-                padding: 12px;
-            }
-        """)
-
-
-        self.fill_table()
-        table_layout.addWidget(self.table)
-        layout.addWidget(table_frame)
-
-
-        # Scroll Area ráp vào Main Layout
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(content_wrapper)
-        main_layout.addWidget(scroll)
-
-
-    # ================= EVENT CHUYỂN TAB =================
-    def switch_tab(self, index):
-        anim = QPropertyAnimation(self.slider, b"geometry")
-        anim.setDuration(250)
-        anim.setEasingCurve(QEasingCurve.InOutQuad)
-
-
-        if index == 0:
-            anim.setEndValue(QRect(8, 6, 203, 56))
-            self.booking_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: white; }")
-            self.history_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: #5A392F; }")
+    # ───────────────────── HELPERS ─────────────────────
+    def create_rounded_image(self, image_path, width, height, radius, crop_align="center"):
+        s = self._s
+        sw, sh, sr = int(width * s), int(height * s), int(radius * s)
+        if not os.path.exists(image_path):
+            img = Image.new("RGB", (sw, sh), color="#8FBFBA")
         else:
-            anim.setEndValue(QRect(219, 6, 203, 56))
-            self.booking_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: #5A392F; }")
-            self.history_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 22px; font-weight: bold; color: white; }")
+            img = Image.open(image_path).convert("RGB")
+        img_ratio = img.width / img.height
+        target_ratio = sw / sh
+        if img_ratio > target_ratio:
+            nw = int(sh * img_ratio)
+            img = img.resize((nw, sh), Image.Resampling.LANCZOS)
+            if isinstance(crop_align, float) or isinstance(crop_align, int):
+                left = int((nw - sw) * crop_align)
+            elif crop_align == "left":
+                left = 0
+            elif crop_align == "right":
+                left = nw - sw
+            else:
+                left = (nw - sw) // 2
+            img = img.crop((left, 0, left + sw, sh))
+        else:
+            nh = int(sw / img_ratio)
+            img = img.resize((sw, nh), Image.Resampling.LANCZOS)
+            if isinstance(crop_align, float) or isinstance(crop_align, int):
+                top = int((nh - sh) * crop_align)
+            elif crop_align == "bottom":
+                top = nh - sh
+            elif crop_align == "top":
+                top = 0
+            else:
+                top = (nh - sh) // 2
+            img = img.crop((0, top, sw, top + sh))
+        mask = Image.new("L", (sw, sh), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, sw, sh), radius=sr, fill=255)
+        result = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        result.paste(img, (0, 0), mask=mask)
+        return ImageTk.PhotoImage(result)
 
+    def _draw_chip(self, cv, cx, cy, text, bg, fg):
+        tw = len(text) * 9 + 24
+        th = 24
+        x1, y1 = cx - tw // 2, cy - th // 2
+        x2, y2 = cx + tw // 2, cy + th // 2
+        _round_rect(cv, x1, y1, x2, y2, radius=th // 2, fill=bg, outline="")
+        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=fg)
 
-        anim.start()
-        self.anim = anim
+    def _draw_filter_btn(self, cv, x1, y1, x2, y2, text):
+        r = (y2 - y1) // 2
+        # White fill
+        _round_rect(cv, x1, y1, x2, y2, radius=r, fill=self.C_WHITE, outline="")
+        # Border using line segments + arcs
+        d = r * 2
+        cv.create_arc(x1, y1, x1 + d, y1 + d, start=90, extent=90,
+                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+        cv.create_arc(x2 - d, y1, x2, y1 + d, start=0, extent=90,
+                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+        cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90,
+                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+        cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90,
+                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+        cv.create_line(x1 + r, y1, x2 - r, y1, fill=self.C_FILTER_BORDER)
+        cv.create_line(x1 + r, y2, x2 - r, y2, fill=self.C_FILTER_BORDER)
+        cv.create_text((x1 + x2) // 2, (y1 + y2) // 2,
+                       text=text, font=self.F_FILTER, fill=self.C_TEXT)
 
+    # ───────────────────── MAIN CONTENT ─────────────────────
+    def draw_content(self):
+        cv = self.canvas
+        dx = -self.BASE_SIDE_W
+        y = self.Y_OFF
 
-    # ================= EVENT THOÁT ỨNG DỤNG =================
-    def logout_action(self):
-        # Hiện bảng hỏi xác nhận thoát ứng dụng
-        reply = QMessageBox.question(self, 'Xác nhận',
-                                     'Bạn có chắc chắn muốn đăng xuất và thoát ứng dụng?',
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-       
-        if reply == QMessageBox.Yes:
-            QApplication.quit() # Đóng hoàn toàn app
+        # ── HEADER BAR ──
+        _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 70 + y, radius=20, fill=self.C_WHITE)
+        cv.create_text(330 + dx, 50 + y, text="Booking",
+                       font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
+        today_str = datetime.now().strftime("%A, %d/%m/%Y")
+        cv.create_text(430 + dx, 50 + y, text=today_str,
+                       font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
+        # Toggle: Bookings | History  (History = active/dark)
+        tgl_r = 18
+        # Active "History" pill
+        _round_rect(cv, 1010 + dx, 32 + y, 1145 + dx, 68 + y, radius=tgl_r, fill=self.C_TEXT)
+        cv.create_text(950 + dx, 50 + y, text="Bookings",
+                       font=self.F_TOGGLE_BTN, fill=self.C_TEXT)
+        cv.create_text(1077 + dx, 50 + y, text="History",
+                       font=self.F_TOGGLE_BTN, fill=self.C_WHITE)
 
-    # ================= TABLE DATA =================
-    def fill_table(self):
-        rows = [
-            ["001", "Milo", "Nguyen Lan", "04/05", "08/05", "R-01"],
-            ["002", "Moa", "Nguyen Lan", "04/05", "08/05", "R-02"],
-            ["003", "Luna", "Tran Vy", "08/05", "12/05", "R-05"],
-            ["004", "Coco", "Minh Anh", "09/05", "13/05", "R-08"],
-            ["005", "Kiki", "Bao Ngoc", "10/05", "15/05", "R-10"],
-            ["006", "Bubu", "Gia Bao", "11/05", "16/05", "R-12"],
-        ]
-       
-        self.table.setRowCount(len(rows))
-        self.table.verticalHeader().setDefaultSectionSize(80)
+        # ── SECTION TITLE ──
+        cv.create_text(300 + dx, 95 + y, text="History",
+                       font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
 
+        # ── FILTER BOX ──
+        fx1, fy1, fx2, fy2 = 300 + dx, 120 + y, 530 + dx, 230 + y
+        _round_rect(cv, fx1, fy1, fx2, fy2, radius=20, fill=self.C_WHITE)
 
-        for row in range(len(rows)):
-            for col in range(6):
-                item = QTableWidgetItem(rows[row][col])
-                item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(row, col, item)
+        btn_w, btn_h_f = 95, 36
+        col_gap, row_gap = 10, 12
+        sx = fx1 + 15
+        sy = fy1 + 15
 
+        filter_labels = ["Check - in", "Check - out", "Staying", "Cancelled"]
+        for idx, label in enumerate(filter_labels):
+            col = idx % 2
+            row = idx // 2
+            bx1 = sx + col * (btn_w + col_gap)
+            by1 = sy + row * (btn_h_f + row_gap)
+            bx2 = bx1 + btn_w
+            by2 = by1 + btn_h_f
+            self._draw_filter_btn(cv, bx1, by1, bx2, by2, label)
 
-        services = [
-            ("Grooming", "#D8E59E"),
-            ("Daycare", "#EDC0CB"),
-            ("Spa", "#C9DDF8"),
-            ("VIP", "#F5D49A"),
-            ("Grooming", "#D8E59E"),
-            ("Daycare", "#EDC0CB")
+        # ── CAT IMAGE ──
+        _dir = os.path.dirname(__file__)
+        cat_path = os.path.join(_dir, "image", "history.jpg")
+        cat_w, cat_h = 600, 200
+        cat_tk = self.create_rounded_image(cat_path, cat_w, cat_h, radius=18, crop_align=0.7)
+        self.images.append(cat_tk)
+        cv.create_image(550 + dx, 85 + y, image=cat_tk, anchor="nw")
+
+        # ── TABLE CARD ──
+        tbl_y1 = 315 + y
+        tbl_y2 = 870 + y
+        _round_rect(cv, 300 + dx, tbl_y1, 1150 + dx, tbl_y2, radius=25, fill=self.C_WHITE)
+
+        # Header
+        hdr_y = tbl_y1 + 35
+        cols = ["#", "Pet", "Owner", "Check in", "Check out", "Room", "Service", "Status"]
+        col_xs = [330 + dx, 368 + dx, 435 + dx, 535 + dx, 640 + dx, 730 + dx, 800 + dx, 960 + dx]
+
+        for col, cx in zip(cols, col_xs):
+            cv.create_text(cx, hdr_y, text=col, font=self.F_TABLE_HEAD,
+                           fill=self.C_TEXT, anchor="w")
+
+        cv.create_line(325 + dx, hdr_y + 22, 1130 + dx, hdr_y + 22,
+                       fill=self.C_DIVIDER, width=1)
+
+        # Rows
+        table_data = [
+            {
+                "num": "001", "pet": "Milo", "owner": "Nguyen\nLan",
+                "checkin": "04/05", "checkout": "08/05", "room": "R-01",
+                "services": [
+                    ("Grooming", self.C_GREEN_CHIP_BG, self.C_GREEN_CHIP_TEXT),
+                    ("Daycare",  self.C_PINK_CHIP_BG,  self.C_PINK_CHIP_TEXT),
+                ],
+                "status": "Staying",
+            },
+            {
+                "num": "002", "pet": "Moa", "owner": "Nguyen\nLan",
+                "checkin": "04/05", "checkout": "08/05", "room": "R-02",
+                "services": [
+                    ("Grooming", self.C_GREEN_CHIP_BG, self.C_GREEN_CHIP_TEXT),
+                    ("Daycare",  self.C_PINK_CHIP_BG,  self.C_PINK_CHIP_TEXT),
+                ],
+                "status": "Staying",
+            },
         ]
 
+        row_h = 80
+        for ri, row in enumerate(table_data):
+            ry = hdr_y + 30 + ri * row_h
+            cy = ry + row_h // 2
 
-        for row in range(len(rows)):
-            # In đậm Tag Dịch vụ
-            service = QLabel(services[row][0])
-            service.setAlignment(Qt.AlignCenter)
-            service.setFixedSize(150, 42)
-            service.setStyleSheet(f"""
-                background: {services[row][1]};
-                border-radius: 21px;
-                font-size: 16px;
-                font-weight: bold;
-                color: #5A392F;
-            """)
-            wrap_service = QWidget()
-            lay_service = QHBoxLayout(wrap_service)
-            lay_service.setContentsMargins(0, 0, 0, 0)
-            lay_service.setAlignment(Qt.AlignCenter)
-            lay_service.addWidget(service)
-            self.table.setCellWidget(row, 6, wrap_service)
+            cv.create_text(col_xs[0], cy, text=row["num"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+            cv.create_text(col_xs[1], cy, text=row["pet"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+            # Owner has newline — centre vertically between the two text lines
+            cv.create_text(col_xs[2], cy, text=row["owner"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+            cv.create_text(col_xs[3], cy, text=row["checkin"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+            cv.create_text(col_xs[4], cy, text=row["checkout"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+            cv.create_text(col_xs[5], cy, text=row["room"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+
+            # Service chips stacked
+            chip_cx = col_xs[6] + 52
+            chip_y0 = cy - 18
+            for ci, (svc, bg, fg) in enumerate(row["services"]):
+                self._draw_chip(cv, chip_cx, chip_y0 + ci * 30, svc, bg, fg)
+
+            cv.create_text(col_xs[7], cy, text=row["status"],
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+
+            # Row divider (not after last row)
+            if ri < len(table_data) - 1:
+                cv.create_line(325 + dx, ry + row_h - 1, 1130 + dx, ry + row_h - 1,
+                               fill=self.C_DIVIDER, width=1)
 
 
-            # In đậm trạng thái
-            status = QLabel("Staying")
-            status.setAlignment(Qt.AlignCenter)
-            status.setStyleSheet("font-size: 18px; font-weight: bold; color: #5A392F; background: transparent;")
-            wrap_status = QWidget()
-            lay_status = QHBoxLayout(wrap_status)
-            lay_status.setContentsMargins(0, 0, 0, 0)
-            lay_status.setAlignment(Qt.AlignCenter)
-            lay_status.addWidget(status)
-            self.table.setCellWidget(row, 7, wrap_status)
-
-
-# ================= RUN =================
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = HistoryApp()
-    window.show()
-    sys.exit(app.exec_())
-
+if __name__ == "__main__":
+    app = BookingHistory()
+    app.mainloop()
