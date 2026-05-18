@@ -127,24 +127,39 @@ class CustomerPetDashboard(tk.Tk):
                            fill=self.C_TEXT, anchor="w")
             y += item_h + gap
 
-        # Rabbit icon
+        # -- Rabbit image above logout --
         _dir = os.path.dirname(__file__)
-        icon_path = os.path.join(_dir, "image", "rabbit.png")
+        rabbit_path = os.path.join(_dir, "image", "rabbit.png")
+        rabbit_w, rabbit_h = 130, 130
         s = self._s
-        iw, ih = int(130 * s), int(130 * s)
+        sw = int(rabbit_w * s)
+        sh = int(rabbit_h * s)
         sr = int(20 * s)
-        if os.path.exists(icon_path):
-            img = Image.open(icon_path).convert("RGBA")
+        if os.path.exists(rabbit_path):
+            img = Image.open(rabbit_path).convert("RGBA")
         else:
-            img = Image.new("RGBA", (iw, ih), color="#CCCCCC")
-        img = img.resize((iw, ih), Image.Resampling.LANCZOS)
-        mask = Image.new("L", (iw, ih), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=sr, fill=255)
-        result = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+            img = Image.new("RGBA", (sw, sh), color="#CCCCCC")
+        img_ratio = img.width / img.height
+        target_ratio = sw / sh
+        if img_ratio > target_ratio:
+            new_width = int(sh * img_ratio)
+            img = img.resize((new_width, sh), Image.Resampling.LANCZOS)
+            left = (new_width - sw) // 2
+            img = img.crop((left, 0, left + sw, sh))
+        else:
+            new_height = int(sw / img_ratio)
+            img = img.resize((sw, new_height), Image.Resampling.LANCZOS)
+            top = (new_height - sh) // 2
+            img = img.crop((0, top, sw, top + sh))
+        mask = Image.new("L", (sw, sh), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle((0, 0, sw, sh), radius=sr, fill=255)
+        result = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
         result.paste(img, (0, 0), mask=mask)
-        icon_tk = ImageTk.PhotoImage(result)
-        self.images.append(icon_tk)
-        cv.create_image(125 - 65, 560, image=icon_tk, anchor="nw")
+        rabbit_tk = ImageTk.PhotoImage(result)
+        self.images.append(rabbit_tk)
+        rabbit_x = 125 - rabbit_w / 2
+        cv.create_image(rabbit_x, 550, image=rabbit_tk, anchor="nw")
 
         base_bottom = self.H / self._s
         btn_h, btn_pad = 42, 25

@@ -32,34 +32,43 @@ class DashboardBackend:
     # 1. Currently Staying – tổng pet đang lưu trú, tách riêng chó / mèo
     # ------------------------------------------------------------------
     def get_currently_staying(self):
-        rows = self.db.fetch_all("""
-            SELECT LOWER(p.species) AS species, COUNT(*) AS cnt
+        total = self.db.fetch_one("""
+            SELECT COUNT(*) AS cnt
+            FROM bookings b
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            WHERE bs.status_name = 'Staying'
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
+        """)
+        dogs = self.db.fetch_one("""
+            SELECT COUNT(*) AS cnt
             FROM bookings b
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             JOIN pets p ON p.pet_id = b.pet_id
-            WHERE bs.status_name IN ('booked', 'checked_in')
-            AND DATE(b.check_in) <= CURDATE()
-            AND DATE(b.check_out) >= CURDATE()
-            GROUP BY LOWER(p.species)
+            WHERE bs.status_name = 'checked_in'
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
+              AND LOWER(p.species) = 'dog'
         """)
-
-        dogs = 0
-        cats = 0
-
-        for r in rows:
-            if r["species"] == "dog":
-                dogs = r["cnt"]
-            elif r["species"] == "cat":
-                cats = r["cnt"]
-
-        total = dogs + cats
-
+        cats = self.db.fetch_one("""
+            SELECT COUNT(*) AS cnt
+            FROM bookings b
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            JOIN pets p ON p.pet_id = b.pet_id
+            WHERE bs.status_name = 'Staying'
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
+              AND LOWER(p.species) = 'cat'
+        """)
+        t = total["cnt"] if total else 0
+        d = dogs["cnt"] if dogs else 0
+        c = cats["cnt"] if cats else 0
         return {
-            "total": total,
-            "dogs": dogs,
-            "cats": cats,
-            "display": format_large_number(total),
-            "subtext": f"{dogs} dogs - {cats} cats",
+            "total": t,
+            "dogs": d,
+            "cats": c,
+            "display": format_large_number(t),
+            "subtext": f"{d} dogs - {c} cats",
         }
 
 
@@ -76,7 +85,7 @@ class DashboardBackend:
             SELECT COUNT(DISTINCT b.room_id) AS cnt
             FROM bookings b
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
-            WHERE bs.status_name IN ('booked', 'checked_in')
+            WHERE bs.status_name = 'Staying'
               AND DATE(b.check_in) <= CURDATE()
               AND DATE(b.check_out) >= CURDATE()
         """)
@@ -153,7 +162,7 @@ class DashboardBackend:
             FROM bookings b
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             WHERE DATE(b.check_out) = CURDATE()
-              AND bs.status_name IN ('checked_in', 'booked')
+              AND bs.status_name IN ('Staying', 'Pending')
         """)
         pending = self.db.fetch_one("""
             SELECT COUNT(*) AS cnt
@@ -161,7 +170,7 @@ class DashboardBackend:
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             LEFT JOIN billing bl ON bl.booking_id = b.booking_id
             WHERE DATE(b.check_out) = CURDATE()
-              AND bs.status_name IN ('checked_in', 'booked')
+              AND bs.status_name IN ('Staying', 'Pending')
               AND bl.payment_id IS NULL
         """)
         t = total["cnt"] if total else 0
@@ -214,7 +223,8 @@ class DashboardBackend:
             JOIN pets p      ON p.pet_id = s.pet_id
             JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
             JOIN rooms r     ON r.room_id = b.room_id
-            WHERE bs.status_name IN ('booked', 'checked_in')
+            WHERE s.service_date = CURDATE()
+              AND bs.status_name = 'Staying'
             ORDER BY s.status, p.pet_name
         """)
         return rows if rows else []

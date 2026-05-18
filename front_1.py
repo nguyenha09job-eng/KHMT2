@@ -333,7 +333,7 @@ class PetDashboard(tk.Tk):
         # ACTIVE BOOKINGS (y: 380 → 670)
         # =========================
         cv.create_text(315+dx, 380+y_off, text="Active Bookings", font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
-        _round_rect(cv, 300+dx, 400+y_off, 1150+dx, 620+y_off, radius=30, fill=self.C_WHITE, outline="")
+        _round_rect(cv, 300+dx, 400+y_off, 1150+dx, 670+y_off, radius=30, fill=self.C_WHITE, outline="")
 
         cols1 = ["Pet", "Owner", "Check in", "Check out", "Status", "Room"]
         xs1 = [365+dx, 475+dx, 605+dx, 745+dx, 880+dx, 1005+dx]
@@ -345,7 +345,6 @@ class PetDashboard(tk.Tk):
             (b["pet"], b["owner"], b["check_in"], b["check_out"], b["status"], b["room"])
             for b in self.data["active_bookings"]
         ]
-        data1 = data1[:5] 
         y = 475 + y_off
         for ri, row in enumerate(data1):
             for i, val in enumerate(row):
@@ -357,68 +356,25 @@ class PetDashboard(tk.Tk):
         # =========================
         # TODAY'S SERVICES (y: 695 → 955)
         # =========================
-        # =========================
-# TODAY'S SERVICES
-# =========================
-        cv.create_text(315+dx, 645+y_off,
-                    text="Today's Services",
-                    font=self.F_SECTION,
-                    fill=self.C_TEXT,
-                    anchor="w")
-
-        _round_rect(cv,
-                    300+dx, 665+y_off,
-                    1150+dx, 940+y_off,
-                    radius=30,
-                    fill=self.C_WHITE,
-                    outline="")
+        cv.create_text(315+dx, 695+y_off, text="Today's Services", font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+        _round_rect(cv, 300+dx, 715+y_off, 1150+dx, 990+y_off, radius=30, fill=self.C_WHITE, outline="")
 
         cols2 = ["Pet", "Service", "Room", "Status", "Frequency"]
         xs2 = [365+dx, 475+dx, 605+dx, 765+dx, 905+dx]
-
         for i, col in enumerate(cols2):
-            cv.create_text(xs2[i],
-                        695+y_off,
-                        text=col,
-                        font=self.F_TABLE_HEAD,
-                        fill=self.C_TEXT,
-                        anchor="w")
-
-        cv.create_line(
-            320+dx,
-            720+y_off,
-            1130+dx,
-            720+y_off,
-            fill=self.C_TEXT_LIGHT
-        )
+            cv.create_text(xs2[i], 740+y_off, text=col, font=self.F_TABLE_HEAD, fill=self.C_TEXT, anchor="w")
+        cv.create_line(320+dx, 765+y_off, 1130+dx, 765+y_off, fill=self.C_TEXT_LIGHT)
 
         data2 = [
             (s["pet"], s["service"], s["room"], s["status"], s["frequency"])
             for s in self.data["today_services"]
         ]
-
-        data2 = data2[:5]
-
-        y = 750 + y_off
-
+        y = 790 + y_off
         for ri, row in enumerate(data2):
             for i, val in enumerate(row):
-                cv.create_text(xs2[i],
-                            y,
-                            text=val,
-                            font=self.F_TABLE_ROW,
-                            fill=self.C_TEXT,
-                            anchor="w")
-
+                cv.create_text(xs2[i], y, text=val, font=self.F_TABLE_ROW, fill=self.C_TEXT, anchor="w")
             if ri < len(data2) - 1:
-                cv.create_line(
-                    320+dx,
-                    y + 17,
-                    1130+dx,
-                    y + 17,
-                    fill=self.C_TEXT_LIGHT
-                )
-
+                cv.create_line(320+dx, y+17, 1130+dx, y+17, fill=self.C_TEXT_LIGHT)
             y += row_h
 
 
