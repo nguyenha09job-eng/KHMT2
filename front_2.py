@@ -3,6 +3,9 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     """Draw a rounded rectangle using arcs for true rounded corners."""
@@ -17,26 +20,97 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
 
-# =========================================================
-# DATA
-# =========================================================
-PETS = [
-    {"name": "Milo",  "type": "Dog", "room": "R-03", "room_type": "Standard",
-     "weight": "15kg", "sex": "Male",   "breed": "Corgi",    "sterilized": True,
-     "service": "Grooming", "status": "Done", "health": "Good", "special": "None", "need": False},
-    {"name": "Luna",  "type": "Cat", "room": "R-08", "room_type": "VIP",
-     "weight": "5kg",  "sex": "Female", "breed": "British",  "sterilized": False,
-     "service": "Bathing",  "status": "Pending", "health": "Allergy", "special": "Diet food", "need": True},
-    {"name": "Rocky", "type": "Dog", "room": "R-01", "room_type": "Standard",
-     "weight": "18kg", "sex": "Male",   "breed": "Husky",    "sterilized": True,
-     "service": "Daycare",  "status": "Done", "health": "Good", "special": "None", "need": False},
-    {"name": "Kitty", "type": "Cat", "room": "R-11", "room_type": "Standard",
-     "weight": "4kg",  "sex": "Female", "breed": "Persian",  "sterilized": False,
-     "service": "Grooming", "status": "Not done", "health": "Skin issue", "special": "Medication", "need": True},
-    {"name": "Mochi", "type": "Dog", "room": "R-05", "room_type": "VIP",
-     "weight": "10kg", "sex": "Male",   "breed": "Poodle",   "sterilized": False,
-     "service": "Nail Trim","status": "Done", "health": "Good", "special": "None", "need": False},
-]
+class CareViewBackend:
+    """Data layer for Care View, kept inside front_2.py as requested."""
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _bit_to_bool(value):
+        if isinstance(value, (bytes, bytearray)):
+            return value != b"\x00"
+        return bool(value)
+
+    @staticmethod
+    def _format_weight(value):
+        if value is None:
+            return "-"
+        if isinstance(value, Decimal):
+            value = float(value)
+        return f"{value:g}kg"
+
+    @staticmethod
+    def _title(value, default="-"):
+        if value in (None, ""):
+            return default
+        return str(value).replace("_", " ").title()
+
+    @staticmethod
+    def _is_need_attention(health, special):
+        health_text = (health or "").strip().lower()
+        special_text = (special or "").strip().lower()
+        return (
+            health_text not in ("", "good", "normal", "healthy", "none")
+            or special_text not in ("", "none", "no", "n/a")
+        )
+
+    def get_pets(self):
+        rows = self.db.fetch_all(
+            """
+            SELECT
+                p.pet_name,
+                p.species,
+                p.breed,
+                p.weight,
+                p.gender,
+                p.sterilized,
+                p.health_condition,
+                p.special_requirement,
+                r.room_id,
+                rt.type_name AS room_type,
+                GROUP_CONCAT(DISTINCT sc.service_type ORDER BY sc.service_type SEPARATOR ', ') AS services_today,
+                GROUP_CONCAT(DISTINCT s.status ORDER BY s.status SEPARATOR ', ') AS service_statuses
+            FROM bookings b
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            JOIN pets p ON p.pet_id = b.pet_id
+            JOIN rooms r ON r.room_id = b.room_id
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            LEFT JOIN services s ON s.booking_id = b.booking_id
+                AND s.service_date = CURDATE()
+            LEFT JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
+            WHERE bs.status_name = 'checked_in'
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) > CURDATE()
+              AND LOWER(p.species) IN ('dog', 'cat')
+            GROUP BY
+                b.booking_id, p.pet_name, p.species, p.breed, p.weight, p.gender,
+                p.sterilized, p.health_condition, p.special_requirement,
+                r.room_id, rt.type_name
+            ORDER BY p.species, p.pet_name
+            """
+        )
+
+        pets = []
+        for row in rows or []:
+            health = row.get("health_condition") or "Good"
+            special = row.get("special_requirement") or "None"
+            pets.append({
+                "name": row.get("pet_name") or "-",
+                "type": self._title(row.get("species")),
+                "room": f"R-{int(row['room_id']):02d}" if row.get("room_id") is not None else "-",
+                "room_type": row.get("room_type") or "-",
+                "weight": self._format_weight(row.get("weight")),
+                "sex": self._title(row.get("gender")),
+                "breed": row.get("breed") or "-",
+                "sterilized": self._bit_to_bool(row.get("sterilized")),
+                "service": row.get("services_today") or "No service today",
+                "status": self._title(row.get("service_statuses"), "None"),
+                "health": health,
+                "special": special,
+                "need": self._is_need_attention(health, special),
+            })
+        return pets
 
 
 class CareViewDashboard(tk.Tk):
@@ -83,6 +157,8 @@ class CareViewDashboard(tk.Tk):
 
         self.images = []
         self.current_filter = "All"
+        self.backend = CareViewBackend()
+        self.pets = self.load_pets()
 
         # -- Layout --
         main = tk.Frame(self, bg=self.C_BG)
@@ -116,7 +192,7 @@ class CareViewDashboard(tk.Tk):
         self.draw_sidebar()
         self.draw_header()
         self.draw_banner()
-        self.draw_pet_cards(PETS)
+        self.draw_pet_cards(self.pets)
 
         # Scale
         self.sidebar_canvas.scale("all", 0, 0, s, s)
@@ -149,6 +225,13 @@ class CareViewDashboard(tk.Tk):
         self.canvas.bind("<Configure>", _update_scrollregion)
 
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def load_pets(self):
+        try:
+            return self.backend.get_pets()
+        except Exception as exc:
+            print(f"Không thể tải dữ liệu Care View: {exc}")
+            return []
 
     # =====================================================
     # SIDEBAR (identical to front_1 but Care View active)
@@ -322,6 +405,14 @@ class CareViewDashboard(tk.Tk):
         cv = self.canvas
         dx = -self.BASE_SIDE_W
         y_off = self.Y_OFF
+
+        if not pets:
+            _round_rect(cv, 300+dx, 300+y_off, 1150+dx, 380+y_off, radius=24,
+                        fill=self.C_CARD, outline="")
+            cv.create_text(725+dx, 340+y_off,
+                           text="No checked-in pets found today",
+                           font=self.F_TITLE, fill=self.C_TEXT)
+            return
 
         # Card dimensions
         card_w = 260

@@ -254,7 +254,7 @@ class StaffPage(tk.Tk):
 
         # "+ New staff" dark pill button (right side)
         nbtn_w, nbtn_h = 190, 40
-        nbtn_x2 = hbar_x2 - 14
+        nbtn_x2 = hbar_x2            # flush với cạnh phải header
         nbtn_x1 = nbtn_x2 - nbtn_w
         nbtn_cy = (hbar_y1 + hbar_y2) // 2
         nbtn_y1 = nbtn_cy - nbtn_h // 2
