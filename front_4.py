@@ -4,6 +4,8 @@ import os
 import sys
 from datetime import datetime
 
+from database import DatabaseConnection
+
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     d = 2 * radius
@@ -16,6 +18,108 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
+
+
+class BookingHistoryBackend:
+    """Data layer for Booking History, kept in this screen file."""
+
+    STATUS_FILTERS = {
+        "Check - in": "booked",
+        "Check - out": "completed",
+        "Staying": "checked_in",
+        "Cancelled": "cancelled",
+    }
+
+    STATUS_LABELS = {
+        "booked": "Check-in",
+        "checked_in": "Staying",
+        "completed": "Check-out",
+        "cancelled": "Cancelled",
+    }
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _title(value, default="-"):
+        if value in (None, ""):
+            return default
+        return str(value).replace("_", " ").title()
+
+    @staticmethod
+    def _format_owner(name):
+        if not name:
+            return "-"
+        parts = str(name).split()
+        if len(parts) <= 1:
+            return parts[0]
+        mid = max(1, len(parts) // 2)
+        return " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
+
+    @staticmethod
+    def _format_room(room_id):
+        if room_id is None:
+            return "-"
+        return f"R-{int(room_id):02d}"
+
+    def get_bookings(self, filter_label=None, limit=80):
+        status_name = self.STATUS_FILTERS.get(filter_label)
+        where_clause = ""
+        params = []
+        if status_name:
+            where_clause = "WHERE bs.status_name = %s"
+            params.append(status_name)
+
+        params.append(limit)
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                b.booking_id,
+                p.pet_name,
+                c.full_name AS owner_name,
+                DATE_FORMAT(b.check_in, '%d/%m') AS checkin,
+                DATE_FORMAT(b.check_out, '%d/%m') AS checkout,
+                r.room_id,
+                bs.status_name,
+                GROUP_CONCAT(DISTINCT sc.service_type ORDER BY sc.service_type SEPARATOR ', ') AS services
+            FROM bookings b
+            JOIN pets p ON p.pet_id = b.pet_id
+            JOIN customers c ON c.customer_id = b.customer_id
+            JOIN rooms r ON r.room_id = b.room_id
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            LEFT JOIN services s ON s.booking_id = b.booking_id
+            LEFT JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
+            {where_clause}
+            GROUP BY
+                b.booking_id, p.pet_name, c.full_name, b.check_in,
+                b.check_out, r.room_id, bs.status_name
+            ORDER BY b.check_in DESC, b.booking_id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+
+        data = []
+        for idx, row in enumerate(rows or [], start=1):
+            service_names = [
+                self._title(item.strip())
+                for item in (row.get("services") or "").split(",")
+                if item.strip()
+            ]
+            if len(service_names) > 2:
+                service_names = service_names[:2] + [f"+{len(service_names) - 2} more"]
+
+            data.append({
+                "num": f"{idx:03d}",
+                "pet": row.get("pet_name") or "-",
+                "owner": self._format_owner(row.get("owner_name")),
+                "checkin": row.get("checkin") or "-",
+                "checkout": row.get("checkout") or "-",
+                "room": self._format_room(row.get("room_id")),
+                "services": service_names or ["No service"],
+                "status": self.STATUS_LABELS.get(row.get("status_name"), self._title(row.get("status_name"))),
+            })
+        return data
 
 
 class BookingHistory(tk.Tk):
@@ -63,6 +167,10 @@ class BookingHistory(tk.Tk):
         self.F_FILTER = ("Baghdad", max(10, int(15 * s)))
 
         self.images = []
+        self.content_images = []
+        self.backend = BookingHistoryBackend()
+        self.current_filter = None
+        self.table_data = self.load_bookings()
 
         # Layout
         main = tk.Frame(self, bg=self.C_BG)
@@ -109,6 +217,31 @@ class BookingHistory(tk.Tk):
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def load_bookings(self):
+        try:
+            return self.backend.get_bookings(self.current_filter)
+        except Exception as exc:
+            print(f"Khong the tai du lieu Booking History: {exc}")
+            return []
+
+    def _refresh_scrollregion(self):
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * self._s)))
+
+    def _redraw_content(self):
+        self.content_images = []
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self._refresh_scrollregion()
+
+    def set_filter(self, filter_label):
+        self.current_filter = None if self.current_filter == filter_label else filter_label
+        self.table_data = self.load_bookings()
+        self._redraw_content()
 
     # ───────────────────── SIDEBAR ─────────────────────
     def draw_sidebar(self):
@@ -197,31 +330,47 @@ class BookingHistory(tk.Tk):
         return ImageTk.PhotoImage(result)
 
     def _draw_chip(self, cv, cx, cy, text, bg, fg):
-        tw = len(text) * 9 + 24
+        tw = min(max(len(text) * 9 + 24, 70), 105)
         th = 24
         x1, y1 = cx - tw // 2, cy - th // 2
         x2, y2 = cx + tw // 2, cy + th // 2
         _round_rect(cv, x1, y1, x2, y2, radius=th // 2, fill=bg, outline="")
-        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=fg)
+        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=fg, width=tw - 10)
+
+    def _service_colors(self, service, index):
+        name = service.lower()
+        if "daycare" in name or "swim" in name or "more" in name:
+            return self.C_PINK_CHIP_BG, self.C_PINK_CHIP_TEXT
+        if "no service" in name:
+            return "#EFEFEF", self.C_TEXT_LIGHT
+        if index % 2:
+            return self.C_PINK_CHIP_BG, self.C_PINK_CHIP_TEXT
+        return self.C_GREEN_CHIP_BG, self.C_GREEN_CHIP_TEXT
 
     def _draw_filter_btn(self, cv, x1, y1, x2, y2, text):
         r = (y2 - y1) // 2
+        active = self.current_filter == text
+        tag = f"filter_{text.lower().replace(' ', '_').replace('-', '')}"
+        fill = self.C_ACTIVE if active else self.C_WHITE
+        fg = self.C_WHITE if active else self.C_TEXT
         # White fill
-        _round_rect(cv, x1, y1, x2, y2, radius=r, fill=self.C_WHITE, outline="")
+        _round_rect(cv, x1, y1, x2, y2, radius=r, fill=fill, outline="", tags=tag)
         # Border using line segments + arcs
         d = r * 2
+        border = self.C_ACTIVE if active else self.C_FILTER_BORDER
         cv.create_arc(x1, y1, x1 + d, y1 + d, start=90, extent=90,
-                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+                      style='arc', outline=border, width=1, tags=tag)
         cv.create_arc(x2 - d, y1, x2, y1 + d, start=0, extent=90,
-                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+                      style='arc', outline=border, width=1, tags=tag)
         cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90,
-                      style='arc', outline=self.C_FILTER_BORDER, width=1)
+                      style='arc', outline=border, width=1, tags=tag)
         cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90,
-                      style='arc', outline=self.C_FILTER_BORDER, width=1)
-        cv.create_line(x1 + r, y1, x2 - r, y1, fill=self.C_FILTER_BORDER)
-        cv.create_line(x1 + r, y2, x2 - r, y2, fill=self.C_FILTER_BORDER)
+                      style='arc', outline=border, width=1, tags=tag)
+        cv.create_line(x1 + r, y1, x2 - r, y1, fill=border, tags=tag)
+        cv.create_line(x1 + r, y2, x2 - r, y2, fill=border, tags=tag)
         cv.create_text((x1 + x2) // 2, (y1 + y2) // 2,
-                       text=text, font=self.F_FILTER, fill=self.C_TEXT)
+                       text=text, font=self.F_FILTER, fill=fg, tags=tag)
+        cv.tag_bind(tag, "<Button-1>", lambda _e, value=text: self.set_filter(value))
 
     # ───────────────────── MAIN CONTENT ─────────────────────
     def draw_content(self):
@@ -274,12 +423,14 @@ class BookingHistory(tk.Tk):
         cat_path = os.path.join(_dir, "image", "history.jpg")
         cat_w, cat_h = 600, 200
         cat_tk = self.create_rounded_image(cat_path, cat_w, cat_h, radius=18, crop_align=0.7)
-        self.images.append(cat_tk)
+        self.content_images.append(cat_tk)
         cv.create_image(550 + dx, 85 + y, image=cat_tk, anchor="nw")
 
         # ── TABLE CARD ──
+        table_data = self.table_data
+        row_h = 80
         tbl_y1 = 315 + y
-        tbl_y2 = 870 + y
+        tbl_y2 = max(870 + y, tbl_y1 + 70 + max(len(table_data), 1) * row_h)
         _round_rect(cv, 300 + dx, tbl_y1, 1150 + dx, tbl_y2, radius=25, fill=self.C_WHITE)
 
         # Header
@@ -295,28 +446,12 @@ class BookingHistory(tk.Tk):
                        fill=self.C_DIVIDER, width=1)
 
         # Rows
-        table_data = [
-            {
-                "num": "001", "pet": "Milo", "owner": "Nguyen\nLan",
-                "checkin": "04/05", "checkout": "08/05", "room": "R-01",
-                "services": [
-                    ("Grooming", self.C_GREEN_CHIP_BG, self.C_GREEN_CHIP_TEXT),
-                    ("Daycare",  self.C_PINK_CHIP_BG,  self.C_PINK_CHIP_TEXT),
-                ],
-                "status": "Staying",
-            },
-            {
-                "num": "002", "pet": "Moa", "owner": "Nguyen\nLan",
-                "checkin": "04/05", "checkout": "08/05", "room": "R-02",
-                "services": [
-                    ("Grooming", self.C_GREEN_CHIP_BG, self.C_GREEN_CHIP_TEXT),
-                    ("Daycare",  self.C_PINK_CHIP_BG,  self.C_PINK_CHIP_TEXT),
-                ],
-                "status": "Staying",
-            },
-        ]
+        if not table_data:
+            cv.create_text(725 + dx, hdr_y + 75,
+                           text="No booking history found",
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT_LIGHT)
+            return
 
-        row_h = 80
         for ri, row in enumerate(table_data):
             ry = hdr_y + 30 + ri * row_h
             cy = ry + row_h // 2
@@ -324,10 +459,10 @@ class BookingHistory(tk.Tk):
             cv.create_text(col_xs[0], cy, text=row["num"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[1], cy, text=row["pet"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=62)
             # Owner has newline — centre vertically between the two text lines
             cv.create_text(col_xs[2], cy, text=row["owner"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=86)
             cv.create_text(col_xs[3], cy, text=row["checkin"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[4], cy, text=row["checkout"],
@@ -337,12 +472,13 @@ class BookingHistory(tk.Tk):
 
             # Service chips stacked
             chip_cx = col_xs[6] + 52
-            chip_y0 = cy - 18
-            for ci, (svc, bg, fg) in enumerate(row["services"]):
+            chip_y0 = cy - 24 if len(row["services"]) >= 3 else cy - 18
+            for ci, svc in enumerate(row["services"][:3]):
+                bg, fg = self._service_colors(svc, ci)
                 self._draw_chip(cv, chip_cx, chip_y0 + ci * 30, svc, bg, fg)
 
             cv.create_text(col_xs[7], cy, text=row["status"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=110)
 
             # Row divider (not after last row)
             if ri < len(table_data) - 1:
