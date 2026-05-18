@@ -80,7 +80,7 @@ class StaffPage(tk.Tk):
         self.F_SALARY_NUM   = ("Arial Rounded MT Bold", max(14, int(22 * s)), "bold")
         self.F_TOGGLE       = ("Baghdad", max(9, int(13 * s)), "bold")
         self.F_DROPDOWN     = ("Baghdad", max(10, int(16 * s)))
-        self.F_NEW_BTN      = ("Baghdad", max(9, int(15 * s)), "bold")
+        self.F_NEW_BTN      = ("Arial Rounded MT Bold", max(12, int(18 * s)), "bold")
 
         self.images = []
 
@@ -253,13 +253,14 @@ class StaffPage(tk.Tk):
                        text=today_str, font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # "+ New staff" dark pill button (right side)
-        nbtn_w, nbtn_h = 145, 36
-        nbtn_x2 = hbar_x2 - 15
+        nbtn_w, nbtn_h = 190, 40
+        nbtn_x2 = hbar_x2 - 14
         nbtn_x1 = nbtn_x2 - nbtn_w
         nbtn_cy = (hbar_y1 + hbar_y2) // 2
         nbtn_y1 = nbtn_cy - nbtn_h // 2
         nbtn_y2 = nbtn_cy + nbtn_h // 2
-        _round_rect(cv, nbtn_x1, nbtn_y1, nbtn_x2, nbtn_y2, radius=nbtn_h // 2, fill=self.C_DARK_BTN)
+        _round_rect(cv, nbtn_x1, nbtn_y1, nbtn_x2, nbtn_y2,
+                    radius=nbtn_h // 2, fill=self.C_DARK_BTN, outline="")
         cv.create_text((nbtn_x1 + nbtn_x2) // 2, nbtn_cy,
                        text="+ New staff", font=self.F_NEW_BTN, fill=self.C_WHITE)
 
