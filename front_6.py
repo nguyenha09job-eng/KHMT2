@@ -3,6 +3,9 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -16,6 +19,79 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
+
+
+class CustomerPetBackend:
+    """Data layer for the Customer & Pet screen."""
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _title(value, default="-"):
+        if value in (None, ""):
+            return default
+        return str(value).replace("_", " ").title()
+
+    @staticmethod
+    def _format_points(value):
+        if value is None:
+            value = 0
+        if isinstance(value, Decimal):
+            value = int(value)
+        return f"{int(value):,}".replace(",", ".") + "P"
+
+    @staticmethod
+    def _pet_label(species):
+        species = str(species or "").lower()
+        if species == "dog":
+            return "Dog"
+        if species == "cat":
+            return "Cat"
+        if species:
+            return species.title()
+        return "Pet"
+
+    def get_customer_pets(self, limit=80):
+        rows = self.db.fetch_all(
+            """
+            SELECT
+                c.customer_id,
+                c.full_name,
+                c.phone,
+                p.pet_id,
+                p.pet_name,
+                p.species,
+                COALESCE(v.current_points, cp.total_point, 0) AS points,
+                COALESCE(v.current_membership, cp.membership_type, 'Standard') AS membership
+            FROM customers c
+            LEFT JOIN pets p ON p.customer_id = c.customer_id
+            LEFT JOIN vw_customer_lifetime_value v ON v.customer_id = c.customer_id
+            LEFT JOIN customer_points cp ON cp.customer_id = c.customer_id
+            ORDER BY
+                c.last_active_date DESC,
+                c.customer_id,
+                p.pet_name
+            LIMIT %s
+            """,
+            (limit,),
+        )
+
+        data = []
+        for row in rows or []:
+            pet_name = row.get("pet_name") or "No pet"
+            species = row.get("species")
+            data.append({
+                "customer_id": row.get("customer_id"),
+                "customer": row.get("full_name") or "-",
+                "phone": row.get("phone") or "-",
+                "pet_name": pet_name,
+                "pet_label": self._pet_label(species) if row.get("pet_id") else "Pet",
+                "pet_chip": species,
+                "points": self._format_points(row.get("points")),
+                "membership": self._title(row.get("membership")),
+            })
+        return data
 
 
 class CustomerPetDashboard(tk.Tk):
@@ -62,6 +138,8 @@ class CustomerPetDashboard(tk.Tk):
         self.F_SEARCH     = ("Baghdad", max(10, int(16 * s)))
 
         self.images = []
+        self.backend = CustomerPetBackend()
+        self.table_data = self.load_customer_pets()
 
         # ── Layout ──
         main = tk.Frame(self, bg=self.C_BG)
@@ -108,6 +186,13 @@ class CustomerPetDashboard(tk.Tk):
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def load_customer_pets(self):
+        try:
+            return self.backend.get_customer_pets()
+        except Exception as exc:
+            print(f"Khong the tai du lieu Customer & Pet: {exc}")
+            return []
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -198,17 +283,23 @@ class CustomerPetDashboard(tk.Tk):
         return ImageTk.PhotoImage(result)
 
     # ─────────────────────────── PET CHIP ───────────────────────────
-    def _draw_pet_chip(self, cv, cx, cy, emoji, name, bg):
-        """Draw a pill chip with emoji + name."""
-        chip_w = len(name) * 10 + 52
+    def _pet_chip_color(self, species):
+        species = str(species or "").lower()
+        if species == "cat":
+            return self.C_CAT_CHIP
+        return self.C_DOG_CHIP
+
+    def _draw_pet_chip(self, cv, cx, cy, label, name, bg):
+        """Draw a pill chip with pet type + name."""
+        text = f"{label} {name}"
+        chip_w = min(max(len(text) * 8 + 24, 88), 140)
         chip_h = 30
         x1 = cx - chip_w // 2
         y1 = cy - chip_h // 2
         x2 = x1 + chip_w
         y2 = y1 + chip_h
         _round_rect(cv, x1, y1, x2, y2, radius=chip_h // 2, fill=bg)
-        cv.create_text(cx - len(name) * 3, cy, text=f"{emoji} {name}",
-                       font=self.F_CHIP, fill=self.C_TEXT)
+        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=self.C_TEXT, width=chip_w - 10)
 
     # ─────────────────────────── MAIN CONTENT ───────────────────────
     def draw_content(self):
@@ -246,8 +337,10 @@ class CustomerPetDashboard(tk.Tk):
                        fill=self.C_TEXT, width=2)
 
         # ── TABLE CARD ──
+        table_data = self.table_data
+        row_h = 58
         tbl_y1 = 318 + y
-        tbl_y2 = 900 + y
+        tbl_y2 = max(900 + y, tbl_y1 + 70 + max(len(table_data), 1) * row_h)
         _round_rect(cv, 300 + dx, tbl_y1, 1150 + dx, tbl_y2, radius=25, fill=self.C_WHITE)
 
         # Column headers
@@ -285,25 +378,32 @@ class CustomerPetDashboard(tk.Tk):
             },
         ]
 
-        row_h = 58
+        table_data = self.table_data
+        if not table_data:
+            cv.create_text(725 + dx, hdr_y + 75,
+                           text="No customers found",
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT_LIGHT)
+            return
+
         for ri, row in enumerate(table_data):
             ry  = hdr_y + 30 + ri * row_h
             rcy = ry + row_h // 2
 
             cv.create_text(col_xs[0], rcy, text=row["customer"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=120)
             cv.create_text(col_xs[1], rcy, text=row["phone"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
 
             # Pet chip centred in the Pets column
             chip_cx = col_xs[2] + 42
             self._draw_pet_chip(cv, chip_cx, rcy,
-                                row["pet_emoji"], row["pet_name"], row["pet_chip"])
+                                row["pet_label"], row["pet_name"],
+                                self._pet_chip_color(row["pet_chip"]))
 
             cv.create_text(col_xs[3], rcy, text=row["points"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[4], rcy, text=row["membership"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=130)
 
             # Profile button
             pbw, pbh = 90, 30

@@ -4,6 +4,8 @@ import os
 import sys
 from datetime import datetime
 
+from database import DatabaseConnection
+
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     d = 2 * radius
@@ -16,6 +18,92 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
+
+
+class RoomsBackend:
+    """Data layer for the Rooms screen."""
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _bit_to_bool(value):
+        if isinstance(value, (bytes, bytearray)):
+            return value != b"\x00"
+        return bool(value)
+
+    @staticmethod
+    def _format_room(room_id):
+        if room_id is None:
+            return "-"
+        return f"R-{int(room_id):02d}"
+
+    @staticmethod
+    def _title(value, default="-"):
+        if value in (None, ""):
+            return default
+        return str(value).replace("_", " ").title()
+
+    def get_rooms(self):
+        rows = self.db.fetch_all(
+            """
+            SELECT
+                r.room_id,
+                r.is_active,
+                rt.type_name,
+                rt.species,
+                EXISTS (
+                    SELECT 1
+                    FROM bookings b
+                    JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+                    WHERE b.room_id = r.room_id
+                      AND bs.status_name IN ('booked', 'checked_in')
+                      AND b.check_in <= NOW()
+                      AND b.check_out >= NOW()
+                ) AS is_occupied
+            FROM rooms r
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            ORDER BY
+                CASE rt.species
+                    WHEN 'dog' THEN 1
+                    WHEN 'cat' THEN 2
+                    ELSE 3
+                END,
+                r.room_id
+            """
+        )
+
+        data = {"dog": [], "cat": [], "both": []}
+        summary = {"occupied": 0, "available": 0, "cleaning": 0, "total": 0}
+
+        for row in rows or []:
+            active = self._bit_to_bool(row.get("is_active"))
+            occupied = bool(row.get("is_occupied"))
+            if not active:
+                status = "Cleaning"
+                summary["cleaning"] += 1
+            elif occupied:
+                status = "Occupied"
+                summary["occupied"] += 1
+            else:
+                status = "Available"
+                summary["available"] += 1
+
+            room = {
+                "room": self._format_room(row.get("room_id")),
+                "type": row.get("type_name") or "-",
+                "species": self._title(row.get("species")),
+                "status": status,
+                "available": status == "Available",
+            }
+            species = str(row.get("species") or "").lower()
+            if species in data:
+                data[species].append(room)
+            else:
+                data["both"].append(room)
+            summary["total"] += 1
+
+        return {"summary": summary, "rooms": data}
 
 
 class RoomsDashboard(tk.Tk):
@@ -45,12 +133,15 @@ class RoomsDashboard(tk.Tk):
         # Room card colors
         self.C_PINK_CARD  = "#F9D0D8"   # occupied / default card bg
         self.C_GREEN_CARD = "#D6EDBB"   # available card bg
+        self.C_CLEAN_CARD = "#EFEFEF"
         self.C_PINK_BTN   = "#F4A7B5"   # status button on pink card
         self.C_GREEN_BTN  = "#A8D878"   # status button on green card
+        self.C_CLEAN_BTN  = "#D8D4CF"
 
         # Legend chips
         self.C_OCC_CHIP   = "#F9D0D8"
         self.C_AVL_CHIP   = "#D6EDBB"
+        self.C_CLEAN_CHIP = "#EFEFEF"
 
         # Fonts
         self.F_LOGO        = ("Arial Rounded MT Bold", max(16, int(40 * s)), "bold")
@@ -66,6 +157,8 @@ class RoomsDashboard(tk.Tk):
         self.F_IMG_LABEL   = ("Arial Rounded MT Bold", max(14, int(26 * s)), "bold")
 
         self.images = []
+        self.backend = RoomsBackend()
+        self.data = self.load_rooms()
 
         # ── Layout ──
         main = tk.Frame(self, bg=self.C_BG)
@@ -112,6 +205,16 @@ class RoomsDashboard(tk.Tk):
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def load_rooms(self):
+        try:
+            return self.backend.get_rooms()
+        except Exception as exc:
+            print(f"Khong the tai du lieu Rooms: {exc}")
+            return {
+                "summary": {"occupied": 0, "available": 0, "cleaning": 0, "total": 0},
+                "rooms": {"dog": [], "cat": [], "both": []},
+            }
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -187,19 +290,26 @@ class RoomsDashboard(tk.Tk):
         return ImageTk.PhotoImage(result)
 
     # ─────────────────────────── ROOM CARD ──────────────────────────
-    def _draw_room_card(self, cv, x, y, card_w, card_h, available=False):
+    def _draw_room_card(self, cv, x, y, card_w, card_h, room):
         """Draw a single room card at (x,y). Green if available, pink otherwise."""
         r = 14
-        card_bg  = self.C_GREEN_CARD if available else self.C_PINK_CARD
-        btn_bg   = self.C_GREEN_BTN  if available else self.C_PINK_BTN
+        available = room["available"]
+        if room["status"] == "Cleaning":
+            card_bg = self.C_CLEAN_CARD
+            btn_bg = self.C_CLEAN_BTN
+        else:
+            card_bg  = self.C_GREEN_CARD if available else self.C_PINK_CARD
+            btn_bg   = self.C_GREEN_BTN  if available else self.C_PINK_BTN
 
         _round_rect(cv, x, y, x + card_w, y + card_h, radius=r, fill=card_bg)
 
         # Text content
         mid_x = x + card_w // 2
-        cv.create_text(mid_x, y + 22, text="Room_ID",   font=self.F_CARD_ID,   fill=self.C_TEXT)
-        cv.create_text(mid_x, y + 40, text="Type_name", font=self.F_CARD_INFO,  fill=self.C_TEXT)
-        cv.create_text(mid_x, y + 56, text="Species",   font=self.F_CARD_INFO,  fill=self.C_TEXT)
+        cv.create_text(mid_x, y + 22, text=room["room"], font=self.F_CARD_ID, fill=self.C_TEXT)
+        cv.create_text(mid_x, y + 43, text=room["type"], font=self.F_CARD_INFO,
+                       fill=self.C_TEXT, width=card_w - 18)
+        cv.create_text(mid_x, y + 62, text=room["species"], font=self.F_CARD_INFO,
+                       fill=self.C_TEXT)
 
         # Status button
         bw, bh = card_w - 24, 26
@@ -208,7 +318,7 @@ class RoomsDashboard(tk.Tk):
         bx2 = bx1 + bw
         by2 = by1 + bh
         _round_rect(cv, bx1, by1, bx2, by2, radius=bh // 2, fill=btn_bg)
-        cv.create_text(mid_x, by1 + bh // 2, text="Status",
+        cv.create_text(mid_x, by1 + bh // 2, text=room["status"],
                        font=self.F_CARD_BTN, fill=self.C_TEXT)
 
     # ─────────────────────────── MAIN CONTENT ───────────────────────
@@ -217,13 +327,17 @@ class RoomsDashboard(tk.Tk):
         dx = -self.BASE_SIDE_W
         y  = self.Y_OFF
         _dir = os.path.dirname(__file__)
+        summary = self.data["summary"]
+        rooms = self.data["rooms"]
 
         # ── HEADER BAR ──
         _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 68 + y, radius=20, fill=self.C_WHITE)
         cv.create_text(330 + dx, 49 + y, text="Rooms",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
         cv.create_text(420 + dx, 49 + y,
-                       text="7 occupied  -  8 available  -  1 cleaning",
+                       text=(f"{summary['occupied']} occupied  -  "
+                             f"{summary['available']} available  -  "
+                             f"{summary['cleaning']} cleaning"),
                        font=self.F_HEADER_SUB, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # ── TOP IMAGE STRIP  (Dog | Cat | Legend) ──
@@ -252,12 +366,12 @@ class RoomsDashboard(tk.Tk):
         leg_x2, leg_y2 = 1148 + dx, img_y + img_h
         _round_rect(cv, leg_x1, leg_y1, leg_x2, leg_y2, radius=16, fill=self.C_WHITE)
 
-        chip_w, chip_h = 252, 36
+        chip_w, chip_h = 252, 28
         chip_r = chip_h // 2
         chip_cx = (leg_x1 + leg_x2) // 2
 
         # Occupied chip
-        occ_y1 = leg_y1 + 18
+        occ_y1 = leg_y1 + 12
         occ_x1 = chip_cx - chip_w // 2
         _round_rect(cv, occ_x1, occ_y1, occ_x1 + chip_w, occ_y1 + chip_h,
                     radius=chip_r, fill=self.C_OCC_CHIP)
@@ -265,11 +379,17 @@ class RoomsDashboard(tk.Tk):
                        text="Occupied", font=self.F_LEGEND, fill=self.C_TEXT)
 
         # Available chip
-        avl_y1 = occ_y1 + chip_h + 12
+        avl_y1 = occ_y1 + chip_h + 8
         _round_rect(cv, occ_x1, avl_y1, occ_x1 + chip_w, avl_y1 + chip_h,
                     radius=chip_r, fill=self.C_AVL_CHIP)
         cv.create_text(chip_cx, avl_y1 + chip_h // 2,
                        text="Available", font=self.F_LEGEND, fill=self.C_TEXT)
+
+        clean_y1 = avl_y1 + chip_h + 8
+        _round_rect(cv, occ_x1, clean_y1, occ_x1 + chip_w, clean_y1 + chip_h,
+                    radius=chip_r, fill=self.C_CLEAN_CHIP)
+        cv.create_text(chip_cx, clean_y1 + chip_h // 2,
+                       text="Cleaning", font=self.F_LEGEND, fill=self.C_TEXT)
 
         # ── SEARCH BAR ──
         s_y1, s_y2 = 216 + y, 252 + y
@@ -292,17 +412,23 @@ class RoomsDashboard(tk.Tk):
                        font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
 
         dog_grid_y = sec_y + 30
-        self._draw_room_grid(cv, dx, dog_grid_y,
-                             n_rooms=7, n_available_last=1)
+        self._draw_room_grid(cv, dx, dog_grid_y, rooms["dog"])
 
         # ── CAT SECTION ──
-        cat_sec_y = dog_grid_y + self._grid_height(7) + 30
+        cat_sec_y = dog_grid_y + self._grid_height(len(rooms["dog"])) + 30
         cv.create_text(300 + dx, cat_sec_y, text="Cat",
                        font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
 
         cat_grid_y = cat_sec_y + 30
-        self._draw_room_grid(cv, dx, cat_grid_y,
-                             n_rooms=7, n_available_last=1)
+        self._draw_room_grid(cv, dx, cat_grid_y, rooms["cat"])
+
+        if rooms["both"]:
+            family_sec_y = cat_grid_y + self._grid_height(len(rooms["cat"])) + 30
+            cv.create_text(300 + dx, family_sec_y, text="Family",
+                           font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+
+            family_grid_y = family_sec_y + 30
+            self._draw_room_grid(cv, dx, family_grid_y, rooms["both"])
 
     def _grid_height(self, n_rooms):
         """Calculate the pixel height of a room grid with n_rooms."""
@@ -310,14 +436,13 @@ class RoomsDashboard(tk.Tk):
         card_h = 110
         gap    = 18
         cols   = 4
-        rows   = (n_rooms + cols - 1) // cols
+        rows   = max(1, (n_rooms + cols - 1) // cols)
         pad_v  = 22
         return rows * card_h + (rows - 1) * gap + pad_v * 2 + 20   # +20 for card shadow feel
 
-    def _draw_room_grid(self, cv, dx, grid_y, n_rooms=7, n_available_last=1):
+    def _draw_room_grid(self, cv, dx, grid_y, rooms):
         """
         Draw a white rounded card containing a grid of room cards.
-        The last n_available_last cards are rendered as 'available' (green).
         """
         card_w  = 184
         card_h  = 110
@@ -327,7 +452,7 @@ class RoomsDashboard(tk.Tk):
         pad_h   = 28   # horizontal padding inside white card
         pad_v   = 22   # vertical padding
 
-        rows = (n_rooms + cols - 1) // cols
+        rows = max(1, (len(rooms) + cols - 1) // cols)
         inner_w = cols * card_w + (cols - 1) * gap_x
         outer_w = inner_w + pad_h * 2
         outer_h = rows * card_h + (rows - 1) * gap_y + pad_v * 2
@@ -344,13 +469,18 @@ class RoomsDashboard(tk.Tk):
         start_x = ox1 + (ox2 - ox1 - total_grid_w) // 2
         start_y = oy1 + pad_v
 
-        for i in range(n_rooms):
+        if not rooms:
+            cv.create_text((ox1 + ox2) // 2, oy1 + outer_h // 2,
+                           text="No rooms found",
+                           font=self.F_CARD_INFO, fill=self.C_TEXT_LIGHT)
+            return
+
+        for i, room in enumerate(rooms):
             col = i % cols
             row = i // cols
             cx  = start_x + col * (card_w + gap_x)
             cy  = start_y + row * (card_h + gap_y)
-            available = (i >= n_rooms - n_available_last)
-            self._draw_room_card(cv, cx, cy, card_w, card_h, available=available)
+            self._draw_room_card(cv, cx, cy, card_w, card_h, room)
 
 
 if __name__ == "__main__":
