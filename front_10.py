@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
-    """Hàm vẽ hình chữ nhật bo góc chuẩn trên Canvas"""
+    """Vẽ hình chữ nhật bo góc bằng pieslice để mượt mà."""
     d = 2 * radius
     kwargs["outline"] = kwargs.get("fill", "")
     items = []
@@ -17,58 +17,68 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
 
+def _round_rect_outline(cv, x1, y1, x2, y2, radius=25, color="#000", width=1):
+    """Vẽ viền hình chữ nhật bo góc mảnh không có ruột màu."""
+    d = 2 * radius
+    cv.create_arc(x1, y1, x1+d, y1+d, start=90, extent=90, style=tk.ARC, outline=color, width=width)
+    cv.create_arc(x2-d, y1, x2, y1+d, start=0, extent=90, style=tk.ARC, outline=color, width=width)
+    cv.create_arc(x2-d, y2-d, x2, y2, start=270, extent=90, style=tk.ARC, outline=color, width=width)
+    cv.create_arc(x1, y2-d, x1+d, y2, start=180, extent=90, style=tk.ARC, outline=color, width=width)
+    cv.create_line(x1+radius, y1, x2-radius, y1, fill=color, width=width)
+    cv.create_line(x2, y1+radius, x2, y2-radius, fill=color, width=width)
+    cv.create_line(x1+radius, y2, x2-radius, y2, fill=color, width=width)
+    cv.create_line(x1, y1+radius, x1, y2-radius, fill=color, width=width)
+
+
 class BillingDashboard(tk.Tk):
     def __init__(self):
         super().__init__()
 
         self.title("Pet&Bed - Billing")
         self.attributes("-fullscreen", True)
-        self.configure(bg="#D5E4A7") # Màu nền xanh lục nhạt chuẩn theo ảnh
+        self.configure(bg="#DDE89D")
         self.update_idletasks()
 
         self.W = self.winfo_width()
         self.H = self.winfo_height()
 
         self.BASE_W = 1200.0
-        self.BASE_H = 950.0  # Tăng chiều cao cơ sở để cuộn xem hết lịch sử
+        self.BASE_H = 880.0
         self._s = self.W / self.BASE_W
         s = self._s
+        self.Y_OFF = 20
 
-        # --- BẢNG MÀU CHUẨN DESIGN ---
-        self.C_BG = "#D5E4A7"
+        # --- Bảng màu chuẩn giống front_2.py ---
+        self.C_BG = "#DDE89D"
         self.C_SIDEBAR = "#FFFFFF"
         self.C_TEXT = "#4A3525"
         self.C_TEXT_LIGHT = "#7A685F"
         self.C_WHITE = "#FFFFFF"
-        self.C_ACTIVE_MENU = "#C2DC6A" # Màu xanh neon nhẹ nút Billing active
-        
-        self.C_CARD_BG = "#FFFFFF"
-        self.C_LINE = "#E8E8E8"
-        
-        # Tags & Status Colors
-        self.C_TAG_MILO = "#F9E1B7"    # Cam nhạt tag Milo
-        self.C_TAG_UNPAID = "#F9D5E2"  # Hồng nhạt Unpaid
-        self.C_TAG_GROOM = "#E0F2CB"   # Xanh lá mạ nhạt
-        self.C_TAG_DAYCARE = "#F9D5E2" # Hồng nhạt daycare
-        self.C_BTN_DONE = "#6CB059"    # Xanh lá cây nút Done
+        self.C_ACTIVE = "#C8DB6D"
+        self.C_UNPAID_BG = "#FADAB5"
+        self.C_PAID_BG = "#E5EFC3"
+        self.C_BTN_GREEN = "#8BB553"
+        self.C_TAG_GREEN = "#DDEAA9"
+        self.C_TAG_PINK = "#F6C6D3"
+        self.C_LINE = "#E5DFDA"
 
-        # --- FONTS RESPONSIVE ---
-        self.F_LOGO = ("Arial Rounded MT Bold", max(16, int(36 * s)), "bold")
-        self.F_NAV = ("Baghdad", max(10, int(16 * s)))
-        self.F_TITLE = ("Arial Rounded MT Bold", max(20, int(32 * s)), "bold")
-        self.F_SUBTITLE = ("Baghdad", max(10, int(15 * s)))
-        self.F_CARD_HDR = ("Arial Rounded MT Bold", max(12, int(20 * s)), "bold")
-        self.F_BODY = ("Baghdad", max(10, int(16 * s)))
-        self.F_BODY_BOLD = ("Baghdad", max(10, int(16 * s)), "bold")
-        self.F_CHIP = ("Baghdad", max(9, int(13 * s)), "bold")
+        # --- Fonts chuẩn cao cấp từ front_2.py ---
+        self.F_LOGO = ("Arial Rounded MT Bold", max(16, int(40 * s)), "bold")
+        self.F_NAV = ("Baghdad", max(10, int(18 * s)))
+        self.F_TITLE_LARGE = ("Arial Rounded MT Bold", max(20, int(34 * s)), "bold")
+        self.F_TITLE_MED = ("Arial Rounded MT Bold", max(14, int(22 * s)), "bold")
+        self.F_DATE = ("Baghdad", max(10, int(18 * s)))
+        self.F_REGULAR = ("Baghdad", max(10, int(16 * s)))
+        self.F_BOLD = ("Baghdad", max(10, int(16 * s)), "bold")
+        self.F_PRICE = ("Arial Rounded MT Bold", max(11, int(17 * s)), "bold")
 
         self.images = []
 
-        # -- Main Layout Container --
+        # -- Layout --
         main = tk.Frame(self, bg=self.C_BG)
         main.pack(fill=tk.BOTH, expand=True)
 
-        self.BASE_SIDE_W = 240
+        self.BASE_SIDE_W = 260
         side_w = int(self.BASE_SIDE_W * s)
 
         # Sidebar Left
@@ -76,7 +86,8 @@ class BillingDashboard(tk.Tk):
         self.side_frame.pack(side=tk.LEFT, fill=tk.Y)
         self.side_frame.pack_propagate(False)
 
-        self.sidebar_canvas = tk.Canvas(self.side_frame, width=side_w, height=self.H, bg=self.C_BG, highlightthickness=0)
+        self.sidebar_canvas = tk.Canvas(self.side_frame, width=side_w, height=self.H,
+                                        bg=self.C_BG, highlightthickness=0)
         self.sidebar_canvas.pack(fill=tk.BOTH, expand=True)
 
         # Content Right (With Scrollbar)
@@ -91,21 +102,22 @@ class BillingDashboard(tk.Tk):
         self.canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.configure(command=self.canvas.yview)
 
-        # Render UI components
+        # Draw
         self.draw_sidebar()
-        self.draw_billing_content()
+        self.draw_billing_page()
 
-        # Áp dụng tỉ lệ scale tự động
+        # Scale Canvas
         self.sidebar_canvas.scale("all", 0, 0, s, s)
         self.canvas.scale("all", 0, 0, s, s)
 
-        # Cấu hình vùng cuộn chuột (Scrollregion)
+        # Scroll bindings
         self.canvas.update_idletasks()
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + 60 * s))
+        else:
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
-        # Khóa sự kiện cuộn chuột
         def _on_mw(event):
             delta = event.delta
             if sys.platform == "darwin":
@@ -114,7 +126,91 @@ class BillingDashboard(tk.Tk):
                 self.canvas.yview_scroll(int(-delta / 120), "units")
 
         self.canvas.bind("<MouseWheel>", _on_mw, add="+")
+        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
+        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
         self.bind("<Escape>", lambda e: self.destroy())
+
+    # =====================================================
+    # SIDEBAR (Identical to front_2.py - Billing Active)
+    # =====================================================
+    def draw_sidebar(self):
+        cv = self.sidebar_canvas
+        _round_rect(cv, -80, 0, 250, 820, radius=30, fill=self.C_SIDEBAR, outline="")
+
+        cv.create_text(125, 70, text="Pet&Bed", font=self.F_LOGO, fill=self.C_TEXT)
+
+        nav_items = ["Dashboard", "Care View", "Booking", "Rooms",
+                     "Customer & Pet", "Billing", "Staff", "Report"]
+        y = 110
+        item_h = 37
+        item_r = item_h // 2
+        pad_x = 36
+        right_x = 215
+        gap = 10
+
+        for i, item in enumerate(nav_items):
+            if i == 5:  # Billing active
+                _round_rect(cv, pad_x, y, right_x, y + item_h,
+                            radius=item_r, fill=self.C_ACTIVE, outline="")
+            else:
+                _round_rect(cv, pad_x, y, right_x, y + item_h,
+                            radius=item_r, fill="#efefef", outline="")
+            cv.create_text(pad_x + 20, y + 20, text=item,
+                           font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+            y += item_h + gap
+
+        # Duck image (Identical to front_2.py crop & round logic)
+        _dir = os.path.dirname(__file__)
+        duck_path = os.path.join(_dir, "image", "duck.png")
+        rabbit_w, rabbit_h = 130, 130
+        s = self._s
+        sw = int(rabbit_w * s)
+        sh = int(rabbit_h * s)
+        sr = int(20 * s)
+        if os.path.exists(duck_path):
+            img = Image.open(duck_path).convert("RGBA")
+        else:
+            img = Image.new("RGBA", (sw, sh), color="#CCCCCC")
+        img_ratio = img.width / img.height
+        target_ratio = sw / sh
+        if img_ratio > target_ratio:
+            new_width = int(sh * img_ratio)
+            img = img.resize((new_width, sh), Image.Resampling.LANCZOS)
+            left = (new_width - sw) // 2
+            img = img.crop((left, 0, left + sw, sh))
+        else:
+            new_height = int(sw / img_ratio)
+            img = img.resize((sw, new_height), Image.Resampling.LANCZOS)
+            top = (new_height - sh) // 2
+            img = img.crop((0, top, sw, top + sh))
+        mask = Image.new("L", (sw, sh), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle((0, 0, sw, sh), radius=sr, fill=255)
+        result = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        result.paste(img, (0, 0), mask=mask)
+        duck_tk = ImageTk.PhotoImage(result)
+        self.images.append(duck_tk)
+        duck_x = 125 - rabbit_w / 2
+        cv.create_image(duck_x, 550, image=duck_tk, anchor="nw")
+
+        # Logout
+        base_bottom = self.H / self._s
+        btn_h = 42
+        btn_pad_bottom = 25
+        btn_y2 = base_bottom - btn_pad_bottom
+        btn_y1 = btn_y2 - btn_h
+        btn_x1 = 30
+        btn_x2 = 220
+        btn_cx = (btn_x1 + btn_x2) / 2
+        btn_cy = (btn_y1 + btn_y2) / 2
+
+        _round_rect(cv, btn_x1, btn_y1, btn_x2, btn_y2,
+                    radius=btn_h // 2, fill=self.C_TEXT, outline="",
+                    tags="logout_btn")
+        cv.create_text(btn_cx, btn_cy, text="Log out",
+                       font=self.F_NAV, fill="#FFFFFF",
+                       tags="logout_btn")
+        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
 
     # =====================================================
     # ROUNDED IMAGE HELPER
@@ -149,204 +245,163 @@ class BillingDashboard(tk.Tk):
         result.paste(img, (0, 0), mask=mask)
         return ImageTk.PhotoImage(result)
 
-    def draw_sidebar(self):
-        cv = self.sidebar_canvas
-        s = self._s
-        # Vẽ dải nền trắng của Sidebar bo tròn cạnh phải sát lề
-        _round_rect(cv, -50, -50, 225, self.H/s + 50, radius=40, fill=self.C_SIDEBAR)
-
-        # App Logo
-        cv.create_text(115, 65, text="Pet&Bed", font=self.F_LOGO, fill=self.C_TEXT)
-
-        # Menu items list
-        nav_items = ["Dashboard", "Care View", "Booking", "Rooms", "Customer & Pet", "Billing", "Staff", "Report"]
-        y = 115
-        item_h = 36
-        pad_x = 25
-        right_x = 205
-        gap = 10
-
-        for i, item in enumerate(nav_items):
-            if i == 5:  # Menu "Billing" đang active
-                _round_rect(cv, pad_x, y, right_x, y + item_h, radius=18, fill=self.C_ACTIVE_MENU)
-                cv.create_text(pad_x + 20, y + 18, text=item, font=self.F_NAV, fill=self.C_TEXT, anchor="w")
-            else: # Các menu thông thường có viền mảnh nhẹ
-                _round_rect(cv, pad_x, y, right_x, y + item_h, radius=18, fill=self.C_WHITE)
-                cv.create_rectangle(pad_x + 10, y, right_x - 10, y + item_h, fill="", outline=self.C_LINE)
-                cv.create_text(pad_x + 20, y + 18, text=item, font=self.F_NAV, fill=self.C_TEXT_LIGHT, anchor="w")
-            y += item_h + gap
-
-        # Duck image
-        _dir = os.path.dirname(__file__)
-        duck_path = os.path.join(_dir, "image", "duck.png")
-        rabbit_w, rabbit_h = 130, 130
-        sw = int(rabbit_w * s)
-        sh = int(rabbit_h * s)
-        sr = int(20 * s)
-        if os.path.exists(duck_path):
-            img = Image.open(duck_path).convert("RGBA")
-        else:
-            img = Image.new("RGBA", (sw, sh), color="#CCCCCC")
-        img_ratio = img.width / img.height
-        target_ratio = sw / sh
-        if img_ratio > target_ratio:
-            new_width = int(sh * img_ratio)
-            img = img.resize((new_width, sh), Image.Resampling.LANCZOS)
-            left = (new_width - sw) // 2
-            img = img.crop((left, 0, left + sw, sh))
-        else:
-            new_height = int(sw / img_ratio)
-            img = img.resize((sw, new_height), Image.Resampling.LANCZOS)
-            top = (new_height - sh) // 2
-            img = img.crop((0, top, sw, top + sh))
-        mask = Image.new("L", (sw, sh), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.rounded_rectangle((0, 0, sw, sh), radius=sr, fill=255)
-        result = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
-        result.paste(img, (0, 0), mask=mask)
-        duck_tk = ImageTk.PhotoImage(result)
-        self.images.append(duck_tk)
-        duck_x = 125 - rabbit_w / 2
-        cv.create_image(duck_x, 550, image=duck_tk, anchor="nw")
-
-        # Nút Log out dạng hình oval màu nâu trầm đặc trưng
-        _round_rect(cv, 25, 790, 205, 832, radius=21, fill=self.C_TEXT)
-        cv.create_text(115, 811, text="Log out", font=self.F_NAV, fill=self.C_WHITE)
-
-    def draw_chip_pill(self, cv, x, y, text, bg_color):
-        """Hàm phụ vẽ các nhãn/tag trạng thái tự động co dãn theo chữ"""
-        temp_txt = cv.create_text(0, 0, text=text, font=self.F_CHIP)
-        bbox = cv.bbox(temp_txt)
-        cv.delete(temp_txt)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        px, py = 12, 4
-        ex, ey = x + tw + px*2, y + th + py*2
-        _round_rect(cv, x, y, ex, ey, radius=(ey-y)//2, fill=bg_color)
-        cv.create_text(x + px + tw/2, y + py + th/2, text=text, font=self.F_CHIP, fill=self.C_TEXT)
-        return ex
-
-    def draw_billing_content(self):
+    # =====================================================
+    # MAIN BILLING PAGE RENDER
+    # =====================================================
+    def draw_billing_page(self):
         cv = self.canvas
-        start_x = 255
-        content_w = 880
-        end_x = start_x + content_w
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
 
-        # 1. TAG TIÊU ĐỀ PHÍA TRÊN CÙNG
-        _round_rect(cv, start_x, 25, start_x + 100, 55, radius=15, fill=self.C_WHITE)
-        cv.create_text(start_x + 50, 40, text="Billing", font=self.F_SUBTITLE, fill=self.C_TEXT)
+        L_PAD = 300 + dx
+        R_PAD = 1150 + dx
+        card_w = R_PAD - L_PAD
 
-        # 2. KHU VỰC TIÊU ĐỀ CHÍNH (DUE TODAY)
-        cv.create_text(start_x, 105, text="DUE TODAY\n(Check-outs)", font=self.F_TITLE, fill=self.C_TEXT, anchor="nw")
-        cv.create_text(start_x, 185, text="Tuesday, 06/05/2025", font=self.F_SUBTITLE, fill=self.C_TEXT_LIGHT, anchor="nw")
+        # -------------------------------------------------
+        # 1. TOP HEADER PILL (Billing)
+        # -------------------------------------------------
+        hdr_y1 = 30 + y_off
+        hdr_y2 = 70 + y_off
+        _round_rect(cv, L_PAD, hdr_y1, R_PAD, hdr_y2, radius=20, fill=self.C_WHITE, outline="")
+        cv.create_text(L_PAD + 25, (hdr_y1 + hdr_y2)/2, text="Billing", font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
 
-        # Banner ảnh Cún bên phải tiêu đề
+        # -------------------------------------------------
+        # 2. MAIN TITLE & DOG BANNER ROW
+        # -------------------------------------------------
+        title_y = 95 + y_off
+        cv.create_text(L_PAD, title_y + 15, text="DUE TODAY\n(Check-outs)", font=self.F_TITLE_LARGE, fill=self.C_TEXT, anchor="nw")
+        cv.create_text(L_PAD, title_y + 90, text="Tuesday, 06/05/2025", font=self.F_DATE, fill=self.C_TEXT, anchor="nw")
+
+        # Dog Banner
         _dir = os.path.dirname(__file__)
         banner_path = os.path.join(_dir, "image", "billing.jpg")
-        banner_w, banner_h = end_x - (start_x + 400), 215 - 85
-        banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.5)
+        banner_w = 440
+        banner_h = 130
+        banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.3)
         self.images.append(banner_tk)
-        cv.create_image(start_x + 400, 85, image=banner_tk, anchor="nw")
+        cv.create_image(R_PAD - banner_w, title_y, image=banner_tk, anchor="nw")
 
-        # 3. THANH TÌM KIẾM (SEARCH BAR)
-        search_y = 235
-        _round_rect(cv, start_x, search_y, end_x, search_y + 45, radius=22, fill=self.C_WHITE)
-        cv.create_text(start_x + 20, search_y + 22, text="Search by name, phone number, or pet name", font=self.F_BODY, fill="#A5A5A5", anchor="w")
-        cv.create_text(end_x - 30, search_y + 22, text="🔍", font=("Arial", 16), fill=self.C_TEXT)
-
-        # 4. THÔNG TIN HOÁ ĐƠN HIỆN TẠI (BOOKING CARD)
-        card_y = 300
-        _round_rect(cv, start_x, card_y, end_x, card_y + 320, radius=24, fill=self.C_CARD_BG)
+        # -------------------------------------------------
+        # 3. SEARCH BAR BELOW BANNER
+        # -------------------------------------------------
+        search_y = 240 + y_off
+        _round_rect(cv, L_PAD, search_y, R_PAD, search_y + 45, radius=22, fill=self.C_WHITE, outline="")
+        cv.create_text(L_PAD + 20, search_y + 22, text="Search by name, phone number, or pet name", font=self.F_REGULAR, fill="#A5A5A5", anchor="w")
         
-        # Header dòng 1 trong Card
-        cv.create_text(start_x + 25, card_y + 28, text="Booking #1041", font=self.F_CARD_HDR, fill=self.C_TEXT, anchor="w")
-        rx = self.draw_chip_pill(cv, start_x + 185, card_y + 16, "🐶 Milo", self.C_TAG_MILO)
-        self.draw_chip_pill(cv, end_x - 85, card_y + 16, "Unpaid", self.C_TAG_UNPAID)
+        # Simple search loop icon
+        cv.create_oval(R_PAD - 40, search_y + 14, R_PAD - 26, search_y + 28, outline=self.C_TEXT, width=2)
+        cv.create_line(R_PAD - 29, search_y + 27, R_PAD - 21, search_y + 35, fill=self.C_TEXT, width=2)
 
-        # Header dòng 2 trong Card
-        cv.create_text(start_x + 25, card_y + 58, text="Trần Minh  -  room_id  -  03/05 ➔ 06/05", font=self.F_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
-        cv.create_line(start_x + 25, card_y + 80, end_x - 25, card_y + 80, fill=self.C_LINE)
+        # -------------------------------------------------
+        # 4. BOOKING CARD
+        # -------------------------------------------------
+        card_y1 = 305 + y_off
+        card_y2 = 625 + y_off
+        _round_rect(cv, L_PAD, card_y1, R_PAD, card_y2, radius=25, fill=self.C_WHITE, outline="")
 
-        # Chi tiết các dịch vụ đã dùng
-        item_y = card_y + 105
-        # Item 1
-        cv.create_text(start_x + 25, item_y, text="Room ( type_name × 3 nights )", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
-        cv.create_text(end_x - 25, item_y, text="900,000đ", font=self.F_BODY, fill=self.C_TEXT, anchor="e")
-        # Sub-chips dưới Room item
-        cx = self.draw_chip_pill(cv, start_x + 25, item_y + 15, "Grooming x2", self.C_TAG_GROOM)
-        self.draw_chip_pill(cv, cx + 10, item_y + 15, "Daycare x2", self.C_TAG_DAYCARE)
+        # Title
+        cv.create_text(L_PAD + 25, card_y1 + 28, text="Booking #1041", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        
+        # Tag Milo
+        _round_rect(cv, L_PAD + 190, card_y1 + 16, L_PAD + 265, card_y1 + 41, radius=12, fill=self.C_UNPAID_BG)
+        cv.create_text(L_PAD + 227, card_y1 + 28, text="🐶 Milo", font=self.F_BOLD, fill=self.C_TEXT)
 
-        # Item 2
-        item_y += 50
-        cv.create_text(start_x + 25, item_y, text="Transport (District 7)", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
-        cv.create_text(end_x - 25, item_y, text="200,000đ", font=self.F_BODY, fill=self.C_TEXT, anchor="e")
+        # Tag Unpaid
+        _round_rect(cv, R_PAD - 110, card_y1 + 16, R_PAD - 25, card_y1 + 41, radius=12, fill=self.C_UNPAID_BG)
+        cv.create_text(R_PAD - 67, card_y1 + 28, text="Unpaid", font=self.F_BOLD, fill=self.C_TEXT)
 
-        # Item 3
-        item_y += 30
-        cv.create_text(start_x + 25, item_y, text="VIP Discount (10%)", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
-        cv.create_text(end_x - 25, item_y, text="-190,000đ", font=self.F_BODY, fill=self.C_TEXT, anchor="e")
+        # Subtitle
+        cv.create_text(L_PAD + 25, card_y1 + 58, text="Trần Minh  -  room_id  -  03/05 ➔ 06/05", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
+        cv.create_line(L_PAD + 25, card_y1 + 78, R_PAD - 25, card_y1 + 78, fill=self.C_LINE)
 
-        # Đường kẻ chia phần tổng tiền
-        cv.create_line(start_x + 25, item_y + 25, end_x - 25, item_y + 25, fill=self.C_LINE)
+        # Items list
+        y_item = card_y1 + 105
+        cv.create_text(L_PAD + 25, y_item, text="Room ( type_name × 3 nights )", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+        cv.create_text(R_PAD - 25, y_item, text="900,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
-        # Tổng cộng tiền mặt cần trả
-        total_y = item_y + 50
-        cv.create_text(start_x + 25, total_y, text="Total amount", font=self.F_BODY_BOLD, fill=self.C_TEXT, anchor="w")
-        cv.create_text(end_x - 25, total_y, text="2,300,000đ", font=self.F_CARD_HDR, fill=self.C_TEXT, anchor="e")
+        y_item += 35
+        # Service Tags under room
+        _round_rect(cv, L_PAD + 25, y_item - 12, L_PAD + 125, y_item + 12, radius=12, fill=self.C_TAG_GREEN)
+        cv.create_text(L_PAD + 75, y_item, text="Grooming x2", font=self.F_BOLD, fill=self.C_TEXT)
 
-        # Phương thức thanh toán (Nút bấm lựa chọn)
-        pay_y = total_y + 25
-        bx = start_x + 25
-        for method in ["Cash", "Bank Transfer", "Card"]:
-            is_active = (method == "Card")
-            bg = self.C_ACTIVE_MENU if is_active else self.C_WHITE
-            bw = 120 if method == "Bank Transfer" else 75
-            _round_rect(cv, bx, pay_y, bx + bw, pay_y + 28, radius=12, fill=bg)
-            if not is_active:
-                cv.create_rectangle(bx + 5, pay_y, bx + bw - 5, pay_y + 28, fill="", outline=self.C_LINE)
-            cv.create_text(bx + bw/2, pay_y + 14, text=method, font=self.F_CHIP, fill=self.C_TEXT)
-            bx += bw + 10
+        _round_rect(cv, L_PAD + 135, y_item - 12, L_PAD + 235, y_item + 12, radius=12, fill=self.C_TAG_PINK)
+        cv.create_text(L_PAD + 185, y_item, text="Daycare x2", font=self.F_BOLD, fill=self.C_TEXT)
+        cv.create_text(R_PAD - 25, y_item, text="550,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
-        # Điểm tích lũy đi kèm
-        cv.create_text(end_x - 25, pay_y + 14, text="Add 1,130 pts to account", font=self.F_BODY, fill=self.C_TEXT_LIGHT, anchor="e")
+        y_item += 35
+        cv.create_text(L_PAD + 25, y_item, text="Transport (District 7)", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+        cv.create_text(R_PAD - 25, y_item, text="200,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
-        # Footer của Card: Ngày tháng & nút hoàn thành
-        foot_y = card_y + 285
-        cv.create_text(start_x + 25, foot_y, text="06/05/2025", font=self.F_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
-        _round_rect(cv, end_x - 115, foot_y - 15, end_x - 25, foot_y + 18, radius=15, fill=self.C_BTN_DONE)
-        cv.create_text(end_x - 70, foot_y, text="Done", font=self.F_CHIP, fill=self.C_WHITE)
+        y_item += 35
+        cv.create_text(L_PAD + 25, y_item, text="VIP Discount (10%)", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+        cv.create_text(R_PAD - 25, y_item, text="-190,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
+        # Divider
+        y_line = y_item + 25
+        cv.create_line(L_PAD + 25, y_line, R_PAD - 25, y_line, fill=self.C_LINE)
 
-        # 5. KHU VỰC LỊCH SỬ GIAO DỊCH (BOOKING HISTORY)
-        hist_y = card_y + 350
-        cv.create_text(start_x, hist_y, text="Booking History", font=self.F_CARD_HDR, fill=self.C_TEXT, anchor="w")
+        # Total amount
+        y_total = y_line + 30
+        cv.create_text(L_PAD + 25, y_total, text="Total amount", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        cv.create_text(R_PAD - 25, y_total, text="2,300,000đ", font=("Arial Rounded MT Bold", max(15, int(21*self._s)), "bold"), fill=self.C_TEXT, anchor="e")
 
-        # Bảng danh sách hoá đơn cũ
-        tbl_y = hist_y + 20
-        _round_rect(cv, start_x, tbl_y, end_x, tbl_y + 220, radius=24, fill=self.C_WHITE)
+        cv.create_text(R_PAD - 25, y_total + 25, text="Add 1,130 pts to account", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
 
-        # Cột tiêu đề Table
-        headers = [("#", 45), ("Customer / Pet", 150), ("Date", 420), ("Amount", 560), ("Method", 700), ("Status", 820)]
-        hdr_y = tbl_y + 25
-        for title, x_offset in headers:
-            cv.create_text(start_x + x_offset, hdr_y, text=title, font=self.F_BODY_BOLD, fill=self.C_TEXT, anchor="w")
+        # Payment options & Done
+        y_btn = y_total + 30
+        # Cash Outline
+        _round_rect_outline(cv, L_PAD + 25, y_btn, L_PAD + 115, y_btn + 34, radius=15, color="#A89F95", width=1)
+        cv.create_text(L_PAD + 70, y_btn + 17, text="Cash", font=self.F_REGULAR, fill=self.C_TEXT)
 
-        cv.create_line(start_x + 25, hdr_y + 15, end_x - 25, hdr_y + 15, fill=self.C_LINE)
+        # Bank Transfer Outline
+        _round_rect_outline(cv, L_PAD + 130, y_btn, L_PAD + 280, y_btn + 34, radius=15, color="#A89F95", width=1)
+        cv.create_text(L_PAD + 205, y_btn + 17, text="Bank Transfer", font=self.F_REGULAR, fill=self.C_TEXT)
 
-        # Render các dòng dữ liệu mẫu trong lịch sử giống hệt hình
-        row_y = hdr_y + 35
+        # Card Solid active
+        _round_rect(cv, L_PAD + 295, y_btn, L_PAD + 385, y_btn + 34, radius=15, fill=self.C_ACTIVE)
+        cv.create_text(L_PAD + 340, y_btn + 17, text="Card", font=self.F_REGULAR, fill=self.C_TEXT)
+
+        # Date at footer
+        cv.create_text(L_PAD + 25, y_btn + 58, text="06/05/2025", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
+
+        # Nút Done
+        _round_rect(cv, R_PAD - 125, y_btn + 22, R_PAD - 25, y_btn + 62, radius=20, fill=self.C_BTN_GREEN)
+        cv.create_text(R_PAD - 75, y_btn + 42, text="Done", font=self.F_BOLD, fill=self.C_WHITE)
+
+        # -------------------------------------------------
+        # 5. BOOKING HISTORY
+        # -------------------------------------------------
+        hist_y = card_y2 + 40
+        cv.create_text(L_PAD, hist_y, text="Booking History", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+
+        tbl_y1 = hist_y + 20
+        tbl_y2 = tbl_y1 + 185
+        _round_rect(cv, L_PAD, tbl_y1, R_PAD, tbl_y2, radius=25, fill=self.C_WHITE, outline="")
+
+        # Table Header
+        h_y = tbl_y1 + 25
+        cols_x = [L_PAD + 30, L_PAD + 80, L_PAD + 280, L_PAD + 420, L_PAD + 560, L_PAD + 700]
+        headers = ["#", "Customer / Pet", "Date", "Amount", "Method", "Status"]
+        for x_pos, text in zip(cols_x, headers):
+            cv.create_text(x_pos, h_y, text=text, font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
+        
+        cv.create_line(L_PAD + 20, h_y + 15, R_PAD - 20, h_y + 15, fill=self.C_LINE)
+
+        # Rows
+        row_y = h_y + 40
         for i in range(2):
-            cv.create_text(start_x + 45, row_y, text="1042", font=self.F_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
-            cv.create_text(start_x + 150, row_y, text="Nguyễn Lan  ·  Milo", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
-            cv.create_text(start_x + 420, row_y, text="04/05/2025", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
-            cv.create_text(start_x + 560, row_y, text="1,130,000đ", font=self.F_BODY_BOLD, fill=self.C_TEXT, anchor="w")
-            cv.create_text(start_x + 700, row_y, text="Transfer", font=self.F_BODY, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[0], row_y, text="1042", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[1], row_y, text="Nguyễn Lan · Milo", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[2], row_y, text="04/05/2025", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[3], row_y, text="1,130,000đ", font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[4], row_y, text="Transfer", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
             
-            # Trạng thái "Paid" dạng chip viên thuốc màu xanh
-            self.draw_chip_pill(cv, start_x + 820, row_y - 11, "  Paid  ", self.C_TAG_GROOM)
+            # Tag Paid
+            _round_rect(cv, cols_x[5]-10, row_y - 12, cols_x[5] + 80, row_y + 12, radius=12, fill=self.C_PAID_BG)
+            cv.create_text(cols_x[5] + 35, row_y, text="Paid", font=self.F_BOLD, fill=self.C_TEXT)
 
-            # Dòng phân cách giữa các hàng
-            cv.create_line(start_x + 25, row_y + 20, end_x - 25, row_y + 20, fill=self.C_LINE)
+            if i == 0:
+                cv.create_line(L_PAD + 20, row_y + 20, R_PAD - 20, row_y + 20, fill=self.C_LINE)
             row_y += 45
 
 if __name__ == "__main__":
