@@ -3,7 +3,7 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
-from backend_1 import DashboardBackend
+from backend import DashboardBackend
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     """Draw a rounded rectangle using arcs for true rounded corners."""
