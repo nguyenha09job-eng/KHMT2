@@ -64,12 +64,12 @@ class StaffPage(tk.Tk):
         self.F_NAV          = ("Baghdad", max(10, int(18 * s)))
         self.F_HEADER_TAB   = ("Baghdad", max(10, int(17 * s)), "bold")
         self.F_HEADER_LIGHT = ("Baghdad", max(10, int(15 * s)))
-        self.F_TITLE_BIG    = ("Arial Rounded MT Bold", max(18, int(34 * s)), "bold")
+        self.F_TITLE_BIG    = ("Arial Rounded MT Bold", max(18, int(32 * s)), "bold")
         self.F_SECTION      = ("Arial Rounded MT Bold", max(14, int(28 * s)), "bold")
-        self.F_CARD_LABEL   = ("Baghdad", max(9, int(14 * s)), "bold")
+        self.F_CARD_LABEL   = ("Baghdad", max(9, int(15 * s)), "bold")
         self.F_CARD_NUM     = ("Arial Rounded MT Bold", max(28, int(70 * s)), "bold")
         self.F_CARD_NUM_MED = ("Arial Rounded MT Bold", max(22, int(55 * s)), "bold")
-        self.F_CARD_SUB     = ("Baghdad", max(9, int(13 * s)))
+        self.F_CARD_SUB     = ("Baghdad", max(9, int(15 * s)))
         self.F_STAFF_NAME   = ("Baghdad", max(10, int(16 * s)), "bold")
         self.F_STAFF_INFO   = ("Baghdad", max(9, int(14 * s)))
         self.F_CHIP         = ("Baghdad", max(9, int(13 * s)), "bold")
@@ -239,7 +239,7 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         hbar_x1 = 300 + dx
         hbar_y1 = 30  + y
-        hbar_x2 = 1150 + dx
+        hbar_x2 = 1168 + dx
         hbar_y2 = 70  + y
         _round_rect(cv, hbar_x1, hbar_y1, hbar_x2, hbar_y2, radius=20, fill=self.C_WHITE)
 
@@ -253,7 +253,7 @@ class StaffPage(tk.Tk):
                        text=today_str, font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # "+ New staff" dark pill button (right side)
-        nbtn_w, nbtn_h = 130, 36
+        nbtn_w, nbtn_h = 145, 36
         nbtn_x2 = hbar_x2 - 15
         nbtn_x1 = nbtn_x2 - nbtn_w
         nbtn_cy = (hbar_y1 + hbar_y2) // 2
@@ -266,7 +266,7 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         # 2.  TITLE "Thu Lan"
         # ══════════════════════════════════════════════════
-        title_y = hbar_y2 + 22
+        title_y = hbar_y2 + 42
         cv.create_text(hbar_x1, title_y,
                        text="Thu Lan", font=self.F_TITLE_BIG, fill=self.C_TEXT, anchor="w")
 
@@ -274,25 +274,10 @@ class StaffPage(tk.Tk):
         # 3.  DROPDOWN "05/2026"
         # ══════════════════════════════════════════════════
         dd_x1 = hbar_x1
-        dd_y1 = title_y + 18
-        dd_x2 = hbar_x1 + 160
-        dd_y2 = dd_y1 + 36
-        _round_rect(cv, dd_x1, dd_y1, dd_x2, dd_y2, radius=12, fill=self.C_WHITE)
-        # draw border
-        r = 12
-        d = r * 2
-        cv.create_arc(dd_x1, dd_y1, dd_x1 + d, dd_y1 + d, start=90, extent=90,
-                      style='arc', outline=self.C_BORDER, width=1)
-        cv.create_arc(dd_x2 - d, dd_y1, dd_x2, dd_y1 + d, start=0, extent=90,
-                      style='arc', outline=self.C_BORDER, width=1)
-        cv.create_arc(dd_x2 - d, dd_y2 - d, dd_x2, dd_y2, start=270, extent=90,
-                      style='arc', outline=self.C_BORDER, width=1)
-        cv.create_arc(dd_x1, dd_y2 - d, dd_x1 + d, dd_y2, start=180, extent=90,
-                      style='arc', outline=self.C_BORDER, width=1)
-        cv.create_line(dd_x1 + r, dd_y1, dd_x2 - r, dd_y1, fill=self.C_BORDER)
-        cv.create_line(dd_x1 + r, dd_y2, dd_x2 - r, dd_y2, fill=self.C_BORDER)
-        cv.create_line(dd_x1, dd_y1 + r, dd_x1, dd_y2 - r, fill=self.C_BORDER)
-        cv.create_line(dd_x2, dd_y1 + r, dd_x2, dd_y2 - r, fill=self.C_BORDER)
+        dd_y1 = title_y + 28
+        dd_x2 = hbar_x1 + 260
+        dd_y2 = dd_y1 + 40
+        _round_rect(cv, dd_x1, dd_y1, dd_x2, dd_y2, radius=20, fill=self.C_WHITE, outline="")
 
         cv.create_text(dd_x1 + 16, (dd_y1 + dd_y2) // 2,
                        text="05/2026", font=self.F_DROPDOWN, fill=self.C_TEXT, anchor="w")
@@ -305,16 +290,16 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         # 4.  TOP ROW:  "Total Employees" card  +  Cat image
         # ══════════════════════════════════════════════════
-        row1_y1 = dd_y2 + 14
+        row1_y1 = dd_y2 + 18
         row1_y2 = row1_y1 + 155
 
         # --- Total Employees card ---
-        emp_card_x2 = hbar_x1 + 205
-        _round_rect(cv, hbar_x1, row1_y1, emp_card_x2, row1_y2, radius=22, fill=self.C_CARD)
+        emp_card_x2 = hbar_x1 + 260
+        _round_rect(cv, hbar_x1, row1_y1, emp_card_x2, row1_y2, radius=26, fill=self.C_CARD)
         card_cx = (hbar_x1 + emp_card_x2) // 2
-        cv.create_text(card_cx, row1_y1 + 26,
+        cv.create_text(card_cx, row1_y1 + 28,
                        text="Total Employees", font=self.F_CARD_LABEL, fill=self.C_TEXT)
-        cv.create_text(card_cx, row1_y1 + 82,
+        cv.create_text(card_cx, row1_y1 + 88,
                        text="4", font=self.F_CARD_NUM, fill=self.C_TEXT)
         cv.create_text(card_cx, row1_y2 - 22,
                        text="3 partime - 1 manager", font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
@@ -322,21 +307,22 @@ class StaffPage(tk.Tk):
         # --- Cat (manage.jpg) rounded image ---
         _dir = os.path.dirname(__file__)
         cat_path = os.path.join(_dir, "image", "manage.jpg")
-        cat_x1 = emp_card_x2 + 16
-        cat_img_w = int(hbar_x2 - cat_x1)   # fill remaining header width
-        cat_img_h = 155
-        cat_tk = self.create_rounded_image(cat_path, cat_img_w, cat_img_h, radius=22, crop_align=0.4)
+        cat_x1 = emp_card_x2 + 24
+        cat_y1 = hbar_y2 + 18
+        cat_img_w = int(hbar_x2 - cat_x1)
+        cat_img_h = int(row1_y2 - cat_y1)
+        cat_tk = self.create_rounded_image(cat_path, cat_img_w, cat_img_h, radius=28, crop_align=0.36)
         self.images.append(cat_tk)
-        cv.create_image(cat_x1, row1_y1, image=cat_tk, anchor="nw")
+        cv.create_image(cat_x1, cat_y1, image=cat_tk, anchor="nw")
 
         # ══════════════════════════════════════════════════
         # 5.  SECOND STATS ROW: 3 equal cards
         # ══════════════════════════════════════════════════
-        row2_y1 = row1_y2 + 14
+        row2_y1 = row1_y2 + 26
         row2_y2 = row2_y1 + 155
 
         total_w = hbar_x2 - hbar_x1
-        card_gap = 14
+        card_gap = 26
         card_w3 = (total_w - card_gap * 2) // 3
 
         stats = [
@@ -363,7 +349,7 @@ class StaffPage(tk.Tk):
         for i, stat in enumerate(stats):
             sx1 = hbar_x1 + i * (card_w3 + card_gap)
             sx2 = sx1 + card_w3
-            _round_rect(cv, sx1, row2_y1, sx2, row2_y2, radius=22, fill=self.C_CARD)
+            _round_rect(cv, sx1, row2_y1, sx2, row2_y2, radius=26, fill=self.C_CARD)
             scx = (sx1 + sx2) // 2
             cv.create_text(scx, row2_y1 + 28,
                            text=stat["label"], font=self.F_CARD_LABEL, fill=self.C_TEXT)
@@ -375,12 +361,12 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         # 6.  BOTTOM ROW: Staff list  +  Attendance Today
         # ══════════════════════════════════════════════════
-        bot_y1 = row2_y2 + 18
-        bot_h  = 340
+        bot_y1 = row2_y2 + 28
+        bot_h  = 410
         bot_y2 = bot_y1 + bot_h
 
-        bot_gap = 14
-        left_w  = int(total_w * 0.505)
+        bot_gap = 28
+        left_w  = int(total_w * 0.515)
         right_w = total_w - left_w - bot_gap
 
         left_x1  = hbar_x1
@@ -389,7 +375,7 @@ class StaffPage(tk.Tk):
         right_x2 = hbar_x2
 
         # ── LEFT: Staff list card ──
-        _round_rect(cv, left_x1, bot_y1, left_x2, bot_y2, radius=22, fill=self.C_CARD)
+        _round_rect(cv, left_x1, bot_y1, left_x2, bot_y2, radius=26, fill=self.C_CARD)
 
         staff_list = [
             {"name": "Thu Lan",  "emp": "EMP001", "phone": "0901111222",
@@ -404,26 +390,27 @@ class StaffPage(tk.Tk):
              "chip": "+ Penalty", "chip_bg": self.C_PINK_BG, "chip_fg": self.C_PINK_FG},
         ]
 
-        row_h_s = (bot_h - 20) // len(staff_list)
-        pad_l = 22
+        row_h_s = (bot_h - 46) // len(staff_list)
+        pad_l = 36
         chip_x_right = left_x2 - 72
 
         for ri, st in enumerate(staff_list):
-            ry1 = bot_y1 + 10 + ri * row_h_s
+            ry1 = bot_y1 + 28 + ri * row_h_s
             ry2 = ry1 + row_h_s
             cy  = ry1 + row_h_s // 2
 
-            # Phone icon circle
-            icon_cx = left_x1 + pad_l + 8
-            cv.create_oval(icon_cx - 10, cy - 10, icon_cx + 10, cy + 10,
-                           fill=self.C_BG, outline="")
-            cv.create_text(icon_cx, cy, text="📞", font=("Arial", max(8, int(10 * self._s))))
+            name_x = left_x1 + pad_l
 
-            name_x = icon_cx + 16
-            cv.create_text(name_x, cy - 9,
+            # Line 1: Name + EMP (bold)
+            cv.create_text(name_x, cy - 10,
                            text=f"{st['name']}  {st['emp']}",
                            font=self.F_STAFF_NAME, fill=self.C_TEXT, anchor="w")
-            cv.create_text(name_x, cy + 10,
+
+            # Line 2: phone icon + phone number (same line)
+            phone_y = cy + 10
+            cv.create_text(name_x, phone_y,
+                           text="📞", font=("Arial", max(8, int(12 * self._s))), anchor="w")
+            cv.create_text(name_x + 22, phone_y,
                            text=st["phone"],
                            font=self.F_STAFF_INFO, fill=self.C_TEXT_LIGHT, anchor="w")
 
@@ -433,11 +420,11 @@ class StaffPage(tk.Tk):
 
             # Divider (not after last)
             if ri < len(staff_list) - 1:
-                cv.create_line(left_x1 + 15, ry2, left_x2 - 15, ry2,
+                cv.create_line(left_x1 + 36, ry2, left_x2 - 36, ry2,
                                fill=self.C_DIVIDER, width=1)
 
         # ── RIGHT: Attendance Today card ──
-        _round_rect(cv, right_x1, bot_y1, right_x2, bot_y2, radius=22, fill=self.C_CARD)
+        _round_rect(cv, right_x1, bot_y1, right_x2, bot_y2, radius=26, fill=self.C_CARD)
 
         # Card header row
         att_title_y = bot_y1 + 28
@@ -536,4 +523,3 @@ class StaffPage(tk.Tk):
 if __name__ == "__main__":
     app = StaffPage()
     app.mainloop()
-
