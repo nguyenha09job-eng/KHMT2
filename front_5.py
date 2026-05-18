@@ -133,20 +133,22 @@ class RoomsDashboard(tk.Tk):
 
         # Decorative animal icon in sidebar
         _dir = os.path.dirname(__file__)
-        icon_path = os.path.join(_dir, "image", "hedgehog.png")  # fallback to any png
+        icon_path = os.path.join(_dir, "image", "cat.png")
         s = self._s
-        iw, ih = int(130 * s), int(100 * s)
-        sr = int(16 * s)
+        iw, ih = int(130 * s), int(130 * s)
+        sr = int(20 * s)
         if os.path.exists(icon_path):
             img = Image.open(icon_path).convert("RGBA")
-            img = img.resize((iw, ih), Image.Resampling.LANCZOS)
-            mask = Image.new("L", (iw, ih), 0)
-            ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=sr, fill=255)
-            result = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
-            result.paste(img, (0, 0), mask=mask)
-            icon_tk = ImageTk.PhotoImage(result)
-            self.images.append(icon_tk)
-            cv.create_image(125 - iw // 2, 570, image=icon_tk, anchor="nw")
+        else:
+            img = Image.new("RGBA", (iw, ih), color="#CCCCCC")
+        img = img.resize((iw, ih), Image.Resampling.LANCZOS)
+        mask = Image.new("L", (iw, ih), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=sr, fill=255)
+        result = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+        result.paste(img, (0, 0), mask=mask)
+        icon_tk = ImageTk.PhotoImage(result)
+        self.images.append(icon_tk)
+        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
 
         base_bottom = self.H / self._s
         btn_h, btn_pad = 42, 25
@@ -250,7 +252,7 @@ class RoomsDashboard(tk.Tk):
         leg_x2, leg_y2 = 1148 + dx, img_y + img_h
         _round_rect(cv, leg_x1, leg_y1, leg_x2, leg_y2, radius=16, fill=self.C_WHITE)
 
-        chip_w, chip_h = 160, 36
+        chip_w, chip_h = 252, 36
         chip_r = chip_h // 2
         chip_cx = (leg_x1 + leg_x2) // 2
 
@@ -304,7 +306,7 @@ class RoomsDashboard(tk.Tk):
 
     def _grid_height(self, n_rooms):
         """Calculate the pixel height of a room grid with n_rooms."""
-        card_w = 160
+        card_w = 184
         card_h = 110
         gap    = 18
         cols   = 4
@@ -317,7 +319,7 @@ class RoomsDashboard(tk.Tk):
         Draw a white rounded card containing a grid of room cards.
         The last n_available_last cards are rendered as 'available' (green).
         """
-        card_w  = 160
+        card_w  = 184
         card_h  = 110
         gap_x   = 18
         gap_y   = 18
