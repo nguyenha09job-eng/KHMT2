@@ -4,6 +4,9 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     d = 2 * radius
@@ -16,6 +19,307 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
+
+
+class BookingBackend:
+    """Data layer for Quick Booking, kept directly in front_3.py."""
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _clean(value):
+        value = (value or "").strip()
+        return value or None
+
+    @staticmethod
+    def _parse_bool(value):
+        return 1 if bool(value) else 0
+
+    @staticmethod
+    def _parse_weight(value):
+        text = (value or "").strip().lower().replace("kg", "").replace(",", ".")
+        try:
+            weight = Decimal(text)
+        except Exception as exc:
+            raise ValueError("Weight must be a number, for example 4.5") from exc
+        if weight <= 0:
+            raise ValueError("Weight must be greater than 0")
+        return weight
+
+    @staticmethod
+    def _parse_datetime(value, end=False):
+        text = (value or "").strip()
+        formats = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+            "%m/%d/%Y",
+            "%m/%d/%y",
+            "%d/%m/%Y",
+            "%d/%m/%y",
+        ]
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(text, fmt)
+                if "%H" not in fmt:
+                    parsed = parsed.replace(hour=8, minute=0, second=0)
+                return parsed
+            except ValueError:
+                pass
+        raise ValueError("Date must be like 2026-05-20 or 05/20/26")
+
+    @staticmethod
+    def _room_id_from_text(value):
+        text = (value or "").strip().upper().replace("R-", "").replace("ROOM", "").strip()
+        return int(text) if text.isdigit() else None
+
+    def create_booking(self, data):
+        phone = self._clean(data.get("phone"))
+        full_name = self._clean(data.get("full_name"))
+        pet_name = self._clean(data.get("pet_name"))
+        species = (data.get("species") or "Dog").strip().lower()
+        gender = (data.get("gender") or "Male").strip().lower()
+        weight = self._parse_weight(data.get("weight"))
+        check_in = self._parse_datetime(data.get("check_in"))
+        check_out = self._parse_datetime(data.get("check_out"), end=True)
+
+        if not phone or not full_name or not pet_name:
+            raise ValueError("Phone number, full name, and pet name are required")
+        if species not in ("dog", "cat"):
+            raise ValueError("Species must be Dog or Cat")
+        if gender not in ("male", "female"):
+            raise ValueError("Gender must be Male or Female")
+        if check_out <= check_in:
+            raise ValueError("Check out must be after check in")
+
+        conn = self.db.connect()
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT customer_id FROM customers WHERE phone = %s LIMIT 1", (phone,))
+            customer = cursor.fetchone()
+            if customer:
+                customer_id = customer["customer_id"]
+                cursor.execute(
+                    """
+                    UPDATE customers
+                    SET full_name = %s, address = %s, district = %s, last_active_date = CURDATE()
+                    WHERE customer_id = %s
+                    """,
+                    (
+                        full_name,
+                        self._clean(data.get("address")),
+                        self._clean(data.get("district")),
+                        customer_id,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO customers (full_name, phone, address, district, last_active_date)
+                    VALUES (%s, %s, %s, %s, CURDATE())
+                    """,
+                    (
+                        full_name,
+                        phone,
+                        self._clean(data.get("address")),
+                        self._clean(data.get("district")),
+                    ),
+                )
+                customer_id = cursor.lastrowid
+
+            cursor.execute(
+                """
+                SELECT pet_id
+                FROM pets
+                WHERE customer_id = %s AND LOWER(pet_name) = LOWER(%s)
+                LIMIT 1
+                """,
+                (customer_id, pet_name),
+            )
+            pet = cursor.fetchone()
+            pet_values = (
+                species,
+                self._clean(data.get("breed")),
+                weight,
+                gender,
+                self._parse_bool(data.get("sterilized")),
+                self._clean(data.get("health_condition")),
+                self._parse_bool(data.get("vaccinated")),
+                self._clean(data.get("behaviour_note")),
+                self._clean(data.get("special_requirement")),
+            )
+            if pet:
+                pet_id = pet["pet_id"]
+                cursor.execute(
+                    """
+                    UPDATE pets
+                    SET species = %s, breed = %s, weight = %s, gender = %s,
+                        sterilized = %s, health_condition = %s, vaccinated = %s,
+                        behaviour_note = %s, special_requirement = %s
+                    WHERE pet_id = %s
+                    """,
+                    (*pet_values, pet_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO pets (
+                        customer_id, pet_name, species, breed, weight, gender,
+                        sterilized, health_condition, vaccinated, behaviour_note,
+                        special_requirement
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (customer_id, pet_name, *pet_values),
+                )
+                pet_id = cursor.lastrowid
+
+            room_type_text = self._clean(data.get("room_type"))
+            if room_type_text:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM room_types
+                    WHERE (LOWER(type_name) LIKE LOWER(%s) OR room_type_id = %s)
+                      AND species IN (%s, 'both')
+                      AND min_weight <= %s
+                      AND max_weight >= %s
+                    ORDER BY species = %s DESC, price_per_night
+                    LIMIT 1
+                    """,
+                    (
+                        f"%{room_type_text}%",
+                        int(room_type_text) if room_type_text.isdigit() else -1,
+                        species,
+                        weight,
+                        weight,
+                        species,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM room_types
+                    WHERE species IN (%s, 'both')
+                      AND min_weight <= %s
+                      AND max_weight >= %s
+                    ORDER BY species = %s DESC, price_per_night
+                    LIMIT 1
+                    """,
+                    (species, weight, weight, species),
+                )
+            room_type = cursor.fetchone()
+            if not room_type:
+                raise ValueError("No matching room type for this species and weight")
+
+            requested_room_id = self._room_id_from_text(data.get("room"))
+            room_params = [
+                room_type["room_type_id"],
+                check_out,
+                check_in,
+            ]
+            room_filter = ""
+            if requested_room_id is not None:
+                room_filter = "AND r.room_id = %s"
+                room_params.append(requested_room_id)
+            cursor.execute(
+                f"""
+                SELECT r.room_id
+                FROM rooms r
+                WHERE r.room_type_id = %s
+                  AND r.is_active = 1
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM bookings b
+                      WHERE b.room_id = r.room_id
+                        AND b.booking_status_id IN (1, 2)
+                        AND b.check_in < %s
+                        AND b.check_out > %s
+                  )
+                  {room_filter}
+                ORDER BY r.room_id
+                LIMIT 1
+                """,
+                tuple(room_params),
+            )
+            room = cursor.fetchone()
+            if not room:
+                raise ValueError("No available room for the selected dates")
+
+            cursor.execute(
+                """
+                INSERT INTO bookings (
+                    customer_id, pet_id, room_id, check_in, check_out,
+                    booking_status_id, room_price, notes
+                )
+                VALUES (%s, %s, %s, %s, %s, 1, %s, %s)
+                """,
+                (
+                    customer_id,
+                    pet_id,
+                    room["room_id"],
+                    check_in,
+                    check_out,
+                    room_type["price_per_night"],
+                    self._clean(data.get("booking_notes")),
+                ),
+            )
+            booking_id = cursor.lastrowid
+
+            service_text = self._clean(data.get("service"))
+            if service_text:
+                cursor.execute(
+                    """
+                    SELECT service_type_id, base_price
+                    FROM service_catalog
+                    WHERE is_active = 1
+                      AND (LOWER(service_type) LIKE LOWER(%s) OR service_type_id = %s)
+                    ORDER BY service_type_id
+                    LIMIT 1
+                    """,
+                    (
+                        f"%{service_text}%",
+                        int(service_text) if service_text.isdigit() else -1,
+                    ),
+                )
+                service = cursor.fetchone()
+                if not service:
+                    raise ValueError("Service not found in service catalog")
+                cursor.execute(
+                    """
+                    INSERT INTO services (
+                        booking_id, pet_id, service_type_id, unit_price,
+                        quantity, total_price, service_date, status
+                    )
+                    VALUES (%s, %s, %s, %s, 1, %s, DATE(%s), 'pending')
+                    """,
+                    (
+                        booking_id,
+                        pet_id,
+                        service["service_type_id"],
+                        service["base_price"],
+                        service["base_price"],
+                        check_in,
+                    ),
+                )
+
+            conn.commit()
+            return {
+                "booking_id": booking_id,
+                "customer_id": customer_id,
+                "pet_id": pet_id,
+                "room_id": room["room_id"],
+                "room_type": room_type["type_name"],
+                "price": room_type["price_per_night"],
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
 
 
 class BookingDashboard(tk.Tk):
@@ -64,6 +368,16 @@ class BookingDashboard(tk.Tk):
         self.F_TOGGLE_BTN = ("Baghdad", max(9, int(14 * s)), "bold")
 
         self.images = []
+        self.backend = BookingBackend()
+        self.entries = {}
+        self.placeholders = {}
+        self.choice_vars = {
+            "membership": tk.StringVar(value="No"),
+            "species": tk.StringVar(value="Dog"),
+            "gender": tk.StringVar(value="Male"),
+        }
+        self.chip_groups = {}
+        self.toggle_vars = {}
 
         # Layout
         main = tk.Frame(self, bg=self.C_BG)
@@ -269,27 +583,27 @@ class BookingDashboard(tk.Tk):
         self._add_section_label(form_frame, "Customer", form_pad)
         row1 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row1.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row1, "Phone number", "ex: 012345678", side=tk.LEFT, expand=True)
-        self._add_labeled_entry(row1, "Full Name", "ex: Thuy Hang", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row1, "Phone number", "ex: 012345678", side=tk.LEFT, expand=True, key="phone")
+        self._add_labeled_entry(row1, "Full Name", "ex: Thuy Hang", side=tk.LEFT, expand=True, key="full_name")
 
         row2 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row2.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row2, "Street address", "ex: 45 Nguyễn Thị Minh Khai", side=tk.LEFT, expand=True)
-        self._add_labeled_entry(row2, "District", "Quận 3", side=tk.LEFT)
+        self._add_labeled_entry(row2, "Street address", "ex: 45 Nguyen Thi Minh Khai", side=tk.LEFT, expand=True, key="address")
+        self._add_labeled_entry(row2, "District", "Quan 3", side=tk.LEFT, key="district")
 
         mem_frame = tk.Frame(form_frame, bg=self.C_CARD_BG)
         mem_frame.pack(fill=tk.X, padx=form_pad, pady=(0, int(12*s)))
         tk.Label(mem_frame, text="Membership", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
         chip_row = tk.Frame(mem_frame, bg=self.C_CARD_BG)
         chip_row.pack(anchor="w", pady=(int(3*s), 0))
-        for idx, chip in enumerate(["No", "VIP", "Premium"]):
-            self._add_chip(chip_row, chip, active=(idx == 0))
+        for chip in ["No", "VIP", "Premium"]:
+            self._add_chip(chip_row, chip, group="membership")
 
         # --- Pets Section ---
         self._add_section_label(form_frame, "Pets", form_pad)
         row3 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row3.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row3, "Name", "ex: Milo", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row3, "Name", "ex: Milo", side=tk.LEFT, expand=True, key="pet_name")
 
         sp_frame = tk.Frame(row3, bg=self.C_CARD_BG)
         sp_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
@@ -297,16 +611,17 @@ class BookingDashboard(tk.Tk):
         sp_chips = tk.Frame(sp_frame, bg=self.C_CARD_BG)
         sp_chips.pack(anchor="w")
         for c in ["Dog", "Cat"]:
-            self._add_chip(sp_chips, c)
+            self._add_chip(sp_chips, c, group="species")
 
         st_frame = tk.Frame(row3, bg=self.C_CARD_BG)
         st_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
         tk.Label(st_frame, text="Sterilization", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
-        self._add_toggle(st_frame)
+        self._add_toggle(st_frame, key="sterilized")
 
         row4 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row4.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row4, "Breed", "ex: Poodle", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row4, "Breed", "ex: Poodle", side=tk.LEFT, expand=True, key="breed")
+        self._add_labeled_entry(row4, "Weight (kg)", "ex: 4.5", side=tk.LEFT, key="weight")
 
         gd_frame = tk.Frame(row4, bg=self.C_CARD_BG)
         gd_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
@@ -314,23 +629,27 @@ class BookingDashboard(tk.Tk):
         gd_chips = tk.Frame(gd_frame, bg=self.C_CARD_BG)
         gd_chips.pack(anchor="w")
         for c in ["Male", "Female"]:
-            self._add_chip(gd_chips, c)
+            self._add_chip(gd_chips, c, group="gender")
 
         vc_frame = tk.Frame(row4, bg=self.C_CARD_BG)
         vc_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
         tk.Label(vc_frame, text="Vaccinated", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
-        self._add_toggle(vc_frame)
+        self._add_toggle(vc_frame, key="vaccinated")
 
-        for label in ["Health condition", "Behaviour note", "Special requirement"]:
+        for label, key in [
+            ("Health condition", "health_condition"),
+            ("Behaviour note", "behaviour_note"),
+            ("Special requirement", "special_requirement"),
+        ]:
             r = tk.Frame(form_frame, bg=self.C_CARD_BG)
             r.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-            self._add_labeled_entry(r, label, "Note here", side=tk.TOP, expand=True, full=True)
+            self._add_labeled_entry(r, label, "Note here", side=tk.TOP, expand=True, full=True, key=key)
 
         # --- Booking Section ---
         self._add_section_label(form_frame, "Booking", form_pad)
         row5 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row5.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row5, "Room type", "ex: type_name", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row5, "Room type", "ex: Small Dog Room", side=tk.LEFT, expand=True, key="room_type")
 
         price_f = tk.Frame(row5, bg=self.C_CARD_BG)
         price_f.pack(side=tk.LEFT, padx=(int(10*s), 0))
@@ -342,13 +661,13 @@ class BookingDashboard(tk.Tk):
 
         row6 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row6.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row6, "Specific room", "ex: room_id", side=tk.LEFT, expand=True)
-        self._add_labeled_entry(row6, "Service", "", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row6, "Specific room", "ex: 11", side=tk.LEFT, expand=True, key="room")
+        self._add_labeled_entry(row6, "Service", "ex: grooming", side=tk.LEFT, expand=True, key="service")
 
         row7 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row7.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row7, "Check in", "mm/dd/yy", side=tk.LEFT, expand=True)
-        self._add_labeled_entry(row7, "Check out", "mm/dd/yy", side=tk.LEFT, expand=True)
+        self._add_labeled_entry(row7, "Check in", "2026-05-20", side=tk.LEFT, expand=True, key="check_in")
+        self._add_labeled_entry(row7, "Check out", "2026-05-23", side=tk.LEFT, expand=True, key="check_out")
 
         # Confirm button (rounded via Canvas)
         btn_h = int(46 * s)
@@ -364,7 +683,7 @@ class BookingDashboard(tk.Tk):
                 _round_rect(btn_cv, bx, 0, bx + bw, ch, radius=ch//2, fill=self.C_CONFIRM, tags="cbtn")
                 btn_cv.create_text(cw//2, ch//2, text="Confirm", font=self.F_BTN, fill="white", tags="cbtn")
         btn_cv.bind("<Configure>", _draw_confirm_btn)
-        btn_cv.bind("<Button-1>", lambda e: messagebox.showinfo("Success", "Booking confirmed!"))
+        btn_cv.bind("<Button-1>", self._on_confirm)
 
 
         # === BOTTOM BANNER (image + text overlay) ===
@@ -403,7 +722,7 @@ class BookingDashboard(tk.Tk):
         sep = tk.Frame(f, bg=self.C_DIVIDER, height=2)
         sep.pack(fill=tk.X, pady=(int(8*s), 0))
 
-    def _add_labeled_entry(self, parent, label, placeholder, side=tk.LEFT, expand=False, full=False):
+    def _add_labeled_entry(self, parent, label, placeholder, side=tk.LEFT, expand=False, full=False, key=None):
         s = self._s
         f = tk.Frame(parent, bg=self.C_CARD_BG)
         if full:
@@ -435,7 +754,20 @@ class BookingDashboard(tk.Tk):
                 border_cv.itemconfig(win_id, width=cw - int(26*s))
                 border_cv.coords(win_id, int(10*s), ch // 2)
         border_cv.bind("<Configure>", _draw_entry_border)
+        if key:
+            self.entries[key] = entry
+            self.placeholders[key] = placeholder
         return entry
+
+    def _entry_value(self, key):
+        entry = self.entries.get(key)
+        if entry is None:
+            return ""
+        value = entry.get().strip()
+        placeholder = self.placeholders.get(key, "")
+        if value == placeholder:
+            return ""
+        return value
 
     def _clear_placeholder(self, entry, placeholder):
         if entry.get() == placeholder:
@@ -447,8 +779,9 @@ class BookingDashboard(tk.Tk):
             entry.insert(0, placeholder)
             entry.config(fg=self.C_PLACEHOLDER)
 
-    def _add_chip(self, parent, text, active=False):
+    def _add_chip(self, parent, text, active=False, group=None, value=None):
         s = self._s
+        chip_value = value or text
         chip_h = int(42 * s)
         txt_len = len(text) if text else 3
         chip_w = int((txt_len * 18 + 36) * s)
@@ -461,7 +794,8 @@ class BookingDashboard(tk.Tk):
             ch = cv.winfo_height()
             if cw > 1 and ch > 1:
                 r = ch // 2
-                if active:
+                active_now = self.choice_vars[group].get() == chip_value if group else active
+                if active_now:
                     _round_rect(cv, 0, 0, cw, ch, radius=r, fill=self.C_ACTIVE, tags="chip")
                     cv.create_text(cw//2, ch//2, text=text, font=self.F_BTN, fill="white", tags="chip")
                 else:
@@ -470,10 +804,20 @@ class BookingDashboard(tk.Tk):
                     _round_rect(cv, 1, 1, cw-1, ch-1, radius=max(1, r-1), fill="white", tags="chip")
                     cv.create_text(cw//2, ch//2, text=text, font=self.F_BTN, fill=self.C_TEXT_LIGHT, tags="chip")
         cv.bind("<Configure>", _draw_chip)
-        cv.bind("<Button-1>", lambda e: None)
+        if group:
+            self.chip_groups.setdefault(group, []).append(_draw_chip)
+
+            def _select(_event=None):
+                self.choice_vars[group].set(chip_value)
+                for redraw in self.chip_groups.get(group, []):
+                    redraw()
+
+            cv.bind("<Button-1>", _select)
+        else:
+            cv.bind("<Button-1>", lambda e: None)
         return cv
 
-    def _add_toggle(self, parent):
+    def _add_toggle(self, parent, key=None):
         s = self._s
         var = tk.BooleanVar(value=False)
         tw, th = int(52*s), int(30*s)
@@ -498,7 +842,48 @@ class BookingDashboard(tk.Tk):
 
         draw_toggle()
         cv.bind("<Button-1>", lambda e: (var.set(not var.get()), draw_toggle()))
+        if key:
+            self.toggle_vars[key] = var
         return var
+
+    def _collect_form_data(self):
+        return {
+            "phone": self._entry_value("phone"),
+            "full_name": self._entry_value("full_name"),
+            "address": self._entry_value("address"),
+            "district": self._entry_value("district"),
+            "membership": self.choice_vars["membership"].get(),
+            "pet_name": self._entry_value("pet_name"),
+            "species": self.choice_vars["species"].get(),
+            "sterilized": self.toggle_vars.get("sterilized", tk.BooleanVar(value=False)).get(),
+            "breed": self._entry_value("breed"),
+            "weight": self._entry_value("weight"),
+            "gender": self.choice_vars["gender"].get(),
+            "vaccinated": self.toggle_vars.get("vaccinated", tk.BooleanVar(value=False)).get(),
+            "health_condition": self._entry_value("health_condition"),
+            "behaviour_note": self._entry_value("behaviour_note"),
+            "special_requirement": self._entry_value("special_requirement"),
+            "room_type": self._entry_value("room_type"),
+            "room": self._entry_value("room"),
+            "service": self._entry_value("service"),
+            "check_in": self._entry_value("check_in"),
+            "check_out": self._entry_value("check_out"),
+        }
+
+    def _on_confirm(self, _event=None):
+        try:
+            result = self.backend.create_booking(self._collect_form_data())
+            messagebox.showinfo(
+                "Success",
+                (
+                    f"Booking #{result['booking_id']} confirmed.\n"
+                    f"Room: R-{result['room_id']:02d}\n"
+                    f"Type: {result['room_type']}"
+                ),
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror("Booking failed", str(exc), parent=self)
 
 
 if __name__ == "__main__":

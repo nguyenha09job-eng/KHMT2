@@ -62,24 +62,24 @@ class StaffPage(tk.Tk):
         # ── Fonts ────────────────────────────────────────────
         self.F_LOGO         = ("Arial Rounded MT Bold", max(16, int(40 * s)), "bold")
         self.F_NAV          = ("Baghdad", max(10, int(18 * s)))
-        self.F_HEADER_TAB   = ("Baghdad", max(10, int(17 * s)), "bold")
-        self.F_HEADER_LIGHT = ("Baghdad", max(10, int(15 * s)))
+        self.F_HEADER_TAB   = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
+        self.F_HEADER_LIGHT = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
         self.F_TITLE_BIG    = ("Arial Rounded MT Bold", max(18, int(32 * s)), "bold")
         self.F_SECTION      = ("Arial Rounded MT Bold", max(14, int(28 * s)), "bold")
-        self.F_CARD_LABEL   = ("Baghdad", max(9, int(15 * s)), "bold")
-        self.F_CARD_NUM     = ("Arial Rounded MT Bold", max(28, int(70 * s)), "bold")
-        self.F_CARD_NUM_MED = ("Arial Rounded MT Bold", max(22, int(55 * s)), "bold")
-        self.F_CARD_SUB     = ("Baghdad", max(9, int(15 * s)))
-        self.F_STAFF_NAME   = ("Baghdad", max(10, int(16 * s)), "bold")
-        self.F_STAFF_INFO   = ("Baghdad", max(9, int(14 * s)))
-        self.F_CHIP         = ("Baghdad", max(9, int(13 * s)), "bold")
-        self.F_CHIP_SMALL   = ("Baghdad", max(9, int(12 * s)))
-        self.F_ATT_TITLE    = ("Baghdad", max(11, int(17 * s)), "bold")
-        self.F_ATT_BODY     = ("Baghdad", max(9, int(14 * s)))
-        self.F_ATT_VALUE    = ("Baghdad", max(9, int(14 * s)))
+        self.F_CARD_LABEL   = ("Baghdad", max(10, int(18 * s)), "bold")    # = F_NAV
+        self.F_CARD_NUM     = ("Arial Rounded MT Bold", max(28, int(85 * s)), "bold")
+        self.F_CARD_NUM_MED = ("Arial Rounded MT Bold", max(22, int(70 * s)), "bold")
+        self.F_CARD_SUB     = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
+        self.F_STAFF_NAME   = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
+        self.F_STAFF_INFO   = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
+        self.F_CHIP         = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
+        self.F_CHIP_SMALL   = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
+        self.F_ATT_TITLE    = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
+        self.F_ATT_BODY     = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
+        self.F_ATT_VALUE    = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
         self.F_SALARY_NUM   = ("Arial Rounded MT Bold", max(14, int(22 * s)), "bold")
-        self.F_TOGGLE       = ("Baghdad", max(9, int(13 * s)), "bold")
-        self.F_DROPDOWN     = ("Baghdad", max(10, int(16 * s)))
+        self.F_TOGGLE       = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
+        self.F_DROPDOWN     = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
         self.F_NEW_BTN      = ("Arial Rounded MT Bold", max(12, int(18 * s)), "bold")
 
         self.images = []
@@ -237,9 +237,9 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         # 1.  HEADER BAR
         # ══════════════════════════════════════════════════
-        hbar_x1 = 300 + dx
+        hbar_x1 = 302 + dx
         hbar_y1 = 30  + y
-        hbar_x2 = 1168 + dx
+        hbar_x2 = 1169 + dx
         hbar_y2 = 70  + y
         _round_rect(cv, hbar_x1, hbar_y1, hbar_x2, hbar_y2, radius=20, fill=self.C_WHITE)
 
@@ -300,7 +300,7 @@ class StaffPage(tk.Tk):
         card_cx = (hbar_x1 + emp_card_x2) // 2
         cv.create_text(card_cx, row1_y1 + 28,
                        text="Total Employees", font=self.F_CARD_LABEL, fill=self.C_TEXT)
-        cv.create_text(card_cx, row1_y1 + 88,
+        cv.create_text(card_cx, row1_y1 + 75,
                        text="4", font=self.F_CARD_NUM, fill=self.C_TEXT)
         cv.create_text(card_cx, row1_y2 - 22,
                        text="3 partime - 1 manager", font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
@@ -354,7 +354,7 @@ class StaffPage(tk.Tk):
             scx = (sx1 + sx2) // 2
             cv.create_text(scx, row2_y1 + 28,
                            text=stat["label"], font=self.F_CARD_LABEL, fill=self.C_TEXT)
-            cv.create_text(scx, row2_y1 + 88,
+            cv.create_text(scx, row2_y1 + 75,
                            text=stat["big"], font=stat["font"], fill=self.C_TEXT)
             cv.create_text(scx, row2_y2 - 22,
                            text=stat["sub"], font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)

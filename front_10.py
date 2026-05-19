@@ -296,7 +296,7 @@ class BillingDashboard(tk.Tk):
         # 4. BOOKING CARD
         # -------------------------------------------------
         card_y1 = 305 + y_off
-        card_y2 = 625 + y_off
+        card_y2 = 705 + y_off
         _round_rect(cv, L_PAD, card_y1, R_PAD, card_y2, radius=25, fill=self.C_WHITE, outline="")
 
         # Title
