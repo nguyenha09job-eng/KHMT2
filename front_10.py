@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
@@ -9,6 +10,12 @@ from database import DatabaseConnection
 
 
 class BillingBackend:
+    METHOD_NAMES = {
+        "cash": "Cash",
+        "transfer": "Bank Transfer",
+        "card": "Card",
+    }
+
     def __init__(self, db=None):
         self.db = db or DatabaseConnection()
 
@@ -37,6 +44,17 @@ class BillingBackend:
         if value in (None, ""):
             return default
         return str(value).replace("_", " ").title()
+
+    @staticmethod
+    def _method_key(value):
+        method = str(value or "").strip().lower().replace("_", " ")
+        if "cash" in method:
+            return "cash"
+        if "bank" in method or "transfer" in method:
+            return "transfer"
+        if "card" in method:
+            return "card"
+        return "card"
 
     def _services_for_booking(self, booking_id):
         rows = self.db.fetch_all(
@@ -106,6 +124,7 @@ class BillingBackend:
         computed_total = max(room_total + service_total - discount, 0)
         total = int(row.get("total_amount") or computed_total)
         method = self._title(row.get("method_name"), "Card")
+        method_key = self._method_key(row.get("method_name"))
         paid = row.get("payment_id") is not None and row.get("payment_method_id") is not None
 
         service_labels = []
@@ -136,10 +155,72 @@ class BillingBackend:
             "total": total,
             "points": int(total // 1000),
             "method": method,
-            "method_key": str(row.get("method_name") or "card").lower(),
+            "method_key": method_key,
             "status": "Paid" if paid else "Unpaid",
             "source_label": source_label,
         }
+
+    def _ensure_payment_method_id(self, method_key):
+        method_key = self._method_key(method_key)
+        method_name = self.METHOD_NAMES.get(method_key, "Card")
+        candidates = {
+            "cash": ("cash",),
+            "transfer": ("bank transfer", "transfer", "bank"),
+            "card": ("card", "credit card", "debit card"),
+        }[method_key]
+
+        placeholders = ", ".join(["%s"] * len(candidates))
+        row = self.db.fetch_one(
+            f"""
+            SELECT method_id
+            FROM payment_methods
+            WHERE LOWER(method_name) IN ({placeholders})
+            ORDER BY method_id
+            LIMIT 1
+            """,
+            candidates,
+        )
+        if row:
+            return row["method_id"]
+        return self.db.execute(
+            "INSERT INTO payment_methods (method_name) VALUES (%s)",
+            (method_name,),
+        )
+
+    def mark_paid(self, focus, method_key):
+        method_id = self._ensure_payment_method_id(method_key)
+        booking_id = focus["booking_id"]
+        existing = self.db.fetch_one(
+            "SELECT payment_id FROM billing WHERE booking_id = %s LIMIT 1",
+            (booking_id,),
+        )
+        params = (
+            focus["total"],
+            focus["discount"],
+            method_id,
+            booking_id,
+        )
+        if existing:
+            self.db.execute(
+                """
+                UPDATE billing
+                SET total_amount = %s,
+                    discount_amount = %s,
+                    payment_date = NOW(),
+                    payment_method_id = %s
+                WHERE booking_id = %s
+                """,
+                params,
+            )
+        else:
+            self.db.execute(
+                """
+                INSERT INTO billing
+                    (total_amount, discount_amount, payment_date, payment_method_id, booking_id)
+                VALUES (%s, %s, NOW(), %s, %s)
+                """,
+                params,
+            )
 
     def get_focus_booking(self):
         candidates = [
@@ -158,6 +239,12 @@ class BillingBackend:
                 (),
                 "Next unpaid",
             ),
+            (
+                "WHERE bl.payment_id IS NOT NULL",
+                "ORDER BY b.check_out DESC, bl.payment_date DESC, b.booking_id DESC",
+                (),
+                "Latest paid",
+            ),
         ]
         for where_clause, order_clause, params, label in candidates:
             row = self._booking_query(where_clause, order_clause, params)
@@ -173,15 +260,15 @@ class BillingBackend:
                 c.full_name,
                 p.pet_name,
                 b.check_out,
-                b.room_price
-            FROM bookings b
+                bl.total_amount,
+                pm.method_name,
+                bl.payment_method_id
+            FROM billing bl
+            JOIN bookings b ON b.booking_id = bl.booking_id
             JOIN customers c ON c.customer_id = b.customer_id
             JOIN pets p ON p.pet_id = b.pet_id
-            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
-            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
-            WHERE (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)
-              AND bs.status_name IN ('booked', 'checked_in')
-            ORDER BY b.check_out, b.booking_id
+            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
+            ORDER BY COALESCE(bl.payment_date, b.check_out) DESC, b.booking_id DESC
             LIMIT %s
             """,
             (limit,),
@@ -192,9 +279,9 @@ class BillingBackend:
                 "booking_id": row.get("booking_id"),
                 "customer_pet": f"{row.get('full_name') or '-'} - {row.get('pet_name') or '-'}",
                 "date": self._full_date(row.get("check_out")),
-                "amount": self._money(row.get("room_price")),
-                "method": "-",
-                "status": "Unpaid",
+                "amount": self._money(row.get("total_amount")),
+                "method": self._title(row.get("method_name"), "-"),
+                "status": "Paid" if row.get("payment_method_id") else "Unpaid",
             })
         return history
 
@@ -218,17 +305,17 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
 
-def _round_rect_outline(cv, x1, y1, x2, y2, radius=25, color="#000", width=1):
+def _round_rect_outline(cv, x1, y1, x2, y2, radius=25, color="#000", width=1, tags=None):
     """Vẽ viền hình chữ nhật bo góc mảnh không có ruột màu."""
     d = 2 * radius
-    cv.create_arc(x1, y1, x1+d, y1+d, start=90, extent=90, style=tk.ARC, outline=color, width=width)
-    cv.create_arc(x2-d, y1, x2, y1+d, start=0, extent=90, style=tk.ARC, outline=color, width=width)
-    cv.create_arc(x2-d, y2-d, x2, y2, start=270, extent=90, style=tk.ARC, outline=color, width=width)
-    cv.create_arc(x1, y2-d, x1+d, y2, start=180, extent=90, style=tk.ARC, outline=color, width=width)
-    cv.create_line(x1+radius, y1, x2-radius, y1, fill=color, width=width)
-    cv.create_line(x2, y1+radius, x2, y2-radius, fill=color, width=width)
-    cv.create_line(x1+radius, y2, x2-radius, y2, fill=color, width=width)
-    cv.create_line(x1, y1+radius, x1, y2-radius, fill=color, width=width)
+    cv.create_arc(x1, y1, x1+d, y1+d, start=90, extent=90, style=tk.ARC, outline=color, width=width, tags=tags)
+    cv.create_arc(x2-d, y1, x2, y1+d, start=0, extent=90, style=tk.ARC, outline=color, width=width, tags=tags)
+    cv.create_arc(x2-d, y2-d, x2, y2, start=270, extent=90, style=tk.ARC, outline=color, width=width, tags=tags)
+    cv.create_arc(x1, y2-d, x1+d, y2, start=180, extent=90, style=tk.ARC, outline=color, width=width, tags=tags)
+    cv.create_line(x1+radius, y1, x2-radius, y1, fill=color, width=width, tags=tags)
+    cv.create_line(x2, y1+radius, x2, y2-radius, fill=color, width=width, tags=tags)
+    cv.create_line(x1+radius, y2, x2-radius, y2, fill=color, width=width, tags=tags)
+    cv.create_line(x1, y1+radius, x1, y2-radius, fill=color, width=width, tags=tags)
 
 
 class BillingDashboard(tk.Tk):
@@ -282,6 +369,9 @@ class BillingDashboard(tk.Tk):
             self.data_error = str(exc)
         else:
             self.data_error = None
+        focus = self.data.get("focus") or {}
+        self.selected_method = focus.get("method_key", "card")
+        self.status_message = ""
 
         # -- Layout --
         main = tk.Frame(self, bg=self.C_BG)
@@ -338,6 +428,38 @@ class BillingDashboard(tk.Tk):
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"), add="+")
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"), add="+")
         self.bind("<Escape>", lambda e: self.destroy())
+
+    def _refresh_scrollregion(self):
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+    def _redraw_billing_page(self):
+        self.canvas.delete("all")
+        self.draw_billing_page()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self._refresh_scrollregion()
+
+    def select_payment_method(self, method_key):
+        self.selected_method = self.backend._method_key(method_key)
+        self.status_message = ""
+        self._redraw_billing_page()
+
+    def confirm_payment(self):
+        focus = self.data.get("focus")
+        if not focus:
+            return
+        try:
+            self.backend.mark_paid(focus, self.selected_method)
+            self.data = self.backend.get_data()
+            focus = self.data.get("focus") or {}
+            self.selected_method = focus.get("method_key", self.selected_method)
+            self.status_message = "Payment saved successfully"
+        except Exception as exc:
+            self.status_message = f"Cannot save payment: {exc}"
+            messagebox.showerror("Billing", self.status_message)
+        self._redraw_billing_page()
 
     # =====================================================
     # SIDEBAR (Identical to front_2.py - Billing Active)
@@ -466,12 +588,17 @@ class BillingDashboard(tk.Tk):
         _round_rect(cv, x2 - width, cy - 12, x2, cy + 13, radius=12, fill=fill)
         cv.create_text(x2 - width / 2, cy, text=status, font=self.F_BOLD, fill=self.C_TEXT)
 
-    def _draw_payment_option(self, cv, x1, y1, x2, label, active=False):
+    def _draw_payment_option(self, cv, x1, y1, x2, label, method_key, active=False):
+        tag = f"payment_{method_key}"
         if active:
-            _round_rect(cv, x1, y1, x2, y1 + 34, radius=15, fill=self.C_ACTIVE)
+            _round_rect(cv, x1, y1, x2, y1 + 34, radius=15, fill=self.C_ACTIVE, tags=tag)
         else:
-            _round_rect_outline(cv, x1, y1, x2, y1 + 34, radius=15, color="#A89F95", width=1)
-        cv.create_text((x1 + x2) / 2, y1 + 17, text=label, font=self.F_REGULAR, fill=self.C_TEXT)
+            cv.create_rectangle(x1, y1, x2, y1 + 34, fill=self.C_WHITE, outline="", tags=tag)
+            _round_rect_outline(cv, x1, y1, x2, y1 + 34, radius=15, color="#A89F95", width=1, tags=tag)
+        cv.create_text((x1 + x2) / 2, y1 + 17, text=label, font=self.F_REGULAR, fill=self.C_TEXT, tags=tag)
+        cv.tag_bind(tag, "<Button-1>", lambda _e, key=method_key: self.select_payment_method(key))
+        cv.tag_bind(tag, "<Enter>", lambda _e: cv.config(cursor="hand2"))
+        cv.tag_bind(tag, "<Leave>", lambda _e: cv.config(cursor=""))
 
     # =====================================================
     # MAIN BILLING PAGE RENDER
@@ -613,23 +740,34 @@ class BillingDashboard(tk.Tk):
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
 
             y_btn = y_total + 30
-            method_key = focus.get("method_key", "card")
-            self._draw_payment_option(cv, L_PAD + 25, y_btn, L_PAD + 115, "Cash", method_key == "cash")
-            self._draw_payment_option(cv, L_PAD + 130, y_btn, L_PAD + 280, "Bank Transfer", method_key == "transfer")
-            self._draw_payment_option(cv, L_PAD + 295, y_btn, L_PAD + 385, "Card", method_key == "card")
+            method_key = self.selected_method
+            self._draw_payment_option(cv, L_PAD + 25, y_btn, L_PAD + 115,
+                                      "Cash", "cash", method_key == "cash")
+            self._draw_payment_option(cv, L_PAD + 130, y_btn, L_PAD + 280,
+                                      "Bank Transfer", "transfer", method_key == "transfer")
+            self._draw_payment_option(cv, L_PAD + 295, y_btn, L_PAD + 385,
+                                      "Card", "card", method_key == "card")
 
             cv.create_text(L_PAD + 25, y_btn + 58, text=focus["payment_date"],
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
+            if self.status_message:
+                msg_color = self.C_BTN_GREEN if "successfully" in self.status_message else "#C04A3A"
+                cv.create_text(L_PAD + 170, y_btn + 58, text=self.status_message,
+                               font=self.F_REGULAR, fill=msg_color, anchor="w")
 
             _round_rect(cv, R_PAD - 125, y_btn + 22, R_PAD - 25, y_btn + 62,
-                        radius=20, fill=self.C_BTN_GREEN)
-            cv.create_text(R_PAD - 75, y_btn + 42, text="Done", font=self.F_BOLD, fill=self.C_WHITE)
+                        radius=20, fill=self.C_BTN_GREEN, tags="done_btn")
+            cv.create_text(R_PAD - 75, y_btn + 42, text="Done", font=self.F_BOLD,
+                           fill=self.C_WHITE, tags="done_btn")
+            cv.tag_bind("done_btn", "<Button-1>", lambda _e: self.confirm_payment())
+            cv.tag_bind("done_btn", "<Enter>", lambda _e: cv.config(cursor="hand2"))
+            cv.tag_bind("done_btn", "<Leave>", lambda _e: cv.config(cursor=""))
 
         # -------------------------------------------------
         # 5. BOOKING HISTORY
         # -------------------------------------------------
         hist_y = card_y2 + 40
-        cv.create_text(L_PAD, hist_y, text="Unpaid Bookings", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        cv.create_text(L_PAD, hist_y, text="Booking History", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = hist_y + 20
         row_count = max(len(history), 1)
@@ -647,7 +785,7 @@ class BillingDashboard(tk.Tk):
 
         row_y = h_y + 40
         if not history:
-            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No unpaid bookings found",
+            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No paid billing history found",
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT)
         for i, item in enumerate(history):
             cv.create_text(cols_x[0], row_y, text=str(item["booking_id"]), font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
