@@ -55,6 +55,8 @@ class CareViewBackend:
         rows = self.db.fetch_all(
             """
             SELECT
+                p.pet_id,
+                b.booking_id,
                 p.pet_name,
                 p.species,
                 p.breed,
@@ -73,14 +75,14 @@ class CareViewBackend:
             JOIN rooms r ON r.room_id = b.room_id
             JOIN room_types rt ON rt.room_type_id = r.room_type_id
             LEFT JOIN services s ON s.booking_id = b.booking_id
-
+ 
             LEFT JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()
               AND DATE(b.check_out) >= CURDATE()
               AND LOWER(p.species) IN ('dog', 'cat')
             GROUP BY
-                b.booking_id, p.pet_name, p.species, p.breed, p.weight, p.gender,
+                p.pet_id, b.booking_id, p.pet_name, p.species, p.breed, p.weight, p.gender,
                 p.sterilized, p.health_condition, p.special_requirement,
                 r.room_id, rt.type_name
             ORDER BY p.species, p.pet_name
@@ -92,6 +94,8 @@ class CareViewBackend:
             health = row.get("health_condition") or "Good"
             special = row.get("special_requirement") or "None"
             pets.append({
+                "pet_id": row.get("pet_id"),
+                "booking_id": row.get("booking_id"),
                 "name": row.get("pet_name") or "-",
                 "type": self._title(row.get("species")),
                 "room": f"R-{int(row['room_id']):02d}" if row.get("room_id") is not None else "-",
@@ -107,6 +111,16 @@ class CareViewBackend:
                 "need": self._is_need_attention(health, special),
             })
         return pets
+
+    def update_service_status(self, booking_id, pet_id, new_status):
+        self.db.execute(
+            """
+            UPDATE services
+            SET status = %s
+            WHERE booking_id = %s AND pet_id = %s
+            """,
+            (new_status, booking_id, pet_id)
+        )
 
 
 class CareViewDashboard(tk.Tk):
@@ -219,6 +233,7 @@ class CareViewDashboard(tk.Tk):
             if bbox:
                 self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + 50 * self._s))
         self.canvas.bind("<Configure>", _update_scrollregion)
+        self.canvas.bind("<Button-1>", self.check_close_dropdown, add="+")
 
         self.bind("<Escape>", lambda e: self.destroy())
 
@@ -251,6 +266,116 @@ class CareViewDashboard(tk.Tk):
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + 50 * self._s))
+
+    def change_pet_status(self, pet, new_status):
+        booking_id = pet.get("booking_id")
+        pet_id = pet.get("pet_id")
+        if booking_id and pet_id:
+            db_status = "done" if new_status == "Done" else "not_done"
+            try:
+                self.backend.update_service_status(booking_id, pet_id, db_status)
+                self.pets = self.load_pets()
+                self.set_filter(self.current_filter)
+            except Exception as e:
+                print(f"Error updating status: {e}")
+
+    def close_dropdown(self):
+        self.canvas.delete("status_dropdown")
+
+    def check_close_dropdown(self, event):
+        clicked_items = self.canvas.find_withtag("current")
+        is_dropdown_click = False
+        for item in clicked_items:
+            tags = self.canvas.gettags(item)
+            if "status_dropdown" in tags or "status_trigger" in tags:
+                is_dropdown_click = True
+                break
+        if not is_dropdown_click:
+            self.close_dropdown()
+
+    def show_dropdown(self, pet, tag):
+        self.close_dropdown()
+        bbox = self.canvas.bbox(tag)
+        if not bbox:
+            return
+        x1, y1, x2, y2 = bbox
+        
+        y_start = y2 + 2
+        menu_h = 56
+        cv = self.canvas
+        
+        # 1. Drop shadow (extremely premium!)
+        _round_rect(cv, x1 + 2, y_start + 2, x2 + 2, y_start + menu_h + 2, radius=8,
+                    fill="#DCD6D0", outline="", tags=("status_dropdown",))
+        # 2. White background card
+        _round_rect(cv, x1, y_start, x2, y_start + menu_h, radius=8,
+                    fill=self.C_WHITE, outline=self.C_LINE, tags=("status_dropdown",))
+                    
+        # Option 1: Done
+        opt1_x1 = x1 + 4
+        opt1_y1 = y_start + 4
+        opt1_x2 = x2 - 4
+        opt1_y2 = y_start + 26
+        
+        hover1_tag = "dropdown_hover_done"
+        text1_tag = "dropdown_text_done"
+        
+        bg1_ids = _round_rect(cv, opt1_x1, opt1_y1, opt1_x2, opt1_y2, radius=6,
+                              fill=self.C_WHITE, outline="", tags=("status_dropdown", hover1_tag))
+        tx1_id = cv.create_text((opt1_x1+opt1_x2)/2, (opt1_y1+opt1_y2)/2, text="Done",
+                                font=self.F_CARD_BTN, fill=self.C_TEXT, tags=("status_dropdown", text1_tag))
+                                
+        def on_enter_1(e):
+            for item_id in bg1_ids:
+                cv.itemconfig(item_id, fill=self.C_TEAL, outline="")
+            cv.itemconfig(tx1_id, fill=self.C_TEXT)
+            
+        def on_leave_1(e):
+            for item_id in bg1_ids:
+                cv.itemconfig(item_id, fill=self.C_WHITE, outline="")
+            cv.itemconfig(tx1_id, fill=self.C_TEXT)
+            
+        def on_click_1(e):
+            self.change_pet_status(pet, "Done")
+            self.close_dropdown()
+            
+        for item_id in bg1_ids + (tx1_id,):
+            cv.tag_bind(item_id, "<Enter>", on_enter_1)
+            cv.tag_bind(item_id, "<Leave>", on_leave_1)
+            cv.tag_bind(item_id, "<Button-1>", on_click_1)
+            
+        # Option 2: Not Done
+        opt2_x1 = x1 + 4
+        opt2_y1 = y_start + 28
+        opt2_x2 = x2 - 4
+        opt2_y2 = y_start + 50
+        
+        hover2_tag = "dropdown_hover_not_done"
+        text2_tag = "dropdown_text_not_done"
+        
+        bg2_ids = _round_rect(cv, opt2_x1, opt2_y1, opt2_x2, opt2_y2, radius=6,
+                              fill=self.C_WHITE, outline="", tags=("status_dropdown", hover2_tag))
+        tx2_id = cv.create_text((opt2_x1+opt2_x2)/2, (opt2_y1+opt2_y2)/2, text="Not Done",
+                                font=self.F_CARD_BTN, fill=self.C_TEXT, tags=("status_dropdown", text2_tag))
+                                
+        def on_enter_2(e):
+            for item_id in bg2_ids:
+                cv.itemconfig(item_id, fill=self.C_TEAL, outline="")
+            cv.itemconfig(tx2_id, fill=self.C_TEXT)
+            
+        def on_leave_2(e):
+            for item_id in bg2_ids:
+                cv.itemconfig(item_id, fill=self.C_WHITE, outline="")
+            cv.itemconfig(tx2_id, fill=self.C_TEXT)
+            
+        def on_click_2(e):
+            self.change_pet_status(pet, "Not Done")
+            self.close_dropdown()
+            
+        for item_id in bg2_ids + (tx2_id,):
+            cv.tag_bind(item_id, "<Enter>", on_enter_2)
+            cv.tag_bind(item_id, "<Leave>", on_leave_2)
+            cv.tag_bind(item_id, "<Button-1>", on_click_2)
 
     # =====================================================
     # SIDEBAR (identical to front_1 but Care View active)
@@ -465,9 +590,9 @@ class CareViewDashboard(tk.Tk):
             x2 = x1 + card_w
             y2 = y1 + card_h
 
-            self._draw_one_card(cv, x1, y1, x2, y2, card_r, pet)
+            self._draw_one_card(cv, x1, y1, x2, y2, card_r, pet, idx)
 
-    def _draw_one_card(self, cv, x1, y1, x2, y2, radius, pet):
+    def _draw_one_card(self, cv, x1, y1, x2, y2, radius, pet, idx):
         # Card background
         _round_rect(cv, x1, y1, x2, y2, radius=radius, fill=self.C_CARD, outline="")
 
@@ -518,18 +643,39 @@ class CareViewDashboard(tk.Tk):
         # Divider line
         cv.create_line(lx, y1 + 140, x2 - pad, y1 + 140, fill=self.C_LINE)
 
-        # Service type + Status button
+        # Service type + Status button / OptionMenu dropdown
         cv.create_text(lx, y1 + 158, text=pet["service"],
                        font=self.F_CARD_INFO, fill=self.C_TEXT, anchor="w")
 
-        st_x1 = x2 - pad - 70
-        st_y1 = y1 + 148
-        st_x2 = x2 - pad
-        st_y2 = y1 + 168
-        _round_rect(cv, st_x1, st_y1, st_x2, st_y2, radius=10,
-                    fill=self.C_TEAL, outline="")
-        cv.create_text((st_x1+st_x2)/2, (st_y1+st_y2)/2, text=pet["status"],
-                       font=self.F_CARD_BTN, fill=self.C_TEXT)
+        if pet["status"] == "None":
+            st_x1 = x2 - pad - 90
+            st_y1 = y1 + 148
+            st_x2 = x2 - pad
+            st_y2 = y1 + 168
+            _round_rect(cv, st_x1, st_y1, st_x2, st_y2, radius=10,
+                        fill="#E0D8D0", outline="")
+            cv.create_text((st_x1+st_x2)/2, (st_y1+st_y2)/2, text="None",
+                           font=self.F_CARD_BTN, fill=self.C_TEXT_LIGHT)
+        else:
+            st_x1 = x2 - pad - 90
+            st_y1 = y1 + 148
+            st_x2 = x2 - pad
+            st_y2 = y1 + 168
+            
+            btn_tag = f"status_btn_{pet['name']}_{idx}"
+            
+            if pet["status"] == "Done":
+                _round_rect(cv, st_x1, st_y1, st_x2, st_y2, radius=10,
+                            fill=self.C_TEAL, outline="", tags=(btn_tag, "status_trigger"))
+                cv.create_text((st_x1+st_x2)/2, (st_y1+st_y2)/2, text="Done",
+                               font=self.F_CARD_BTN, fill=self.C_TEXT, tags=(btn_tag, "status_trigger"))
+            else:
+                _round_rect(cv, st_x1, st_y1, st_x2, st_y2, radius=10,
+                            fill=self.C_WHITE, outline=self.C_TEAL, tags=(btn_tag, "status_trigger"))
+                cv.create_text((st_x1+st_x2)/2, (st_y1+st_y2)/2, text="Not Done",
+                               font=self.F_CARD_BTN, fill=self.C_TEXT, tags=(btn_tag, "status_trigger"))
+                               
+            cv.tag_bind(btn_tag, "<Button-1>", lambda e, p=pet, tag=btn_tag: self.show_dropdown(p, tag))
 
         # Divider
         cv.create_line(lx, y1 + 180, x2 - pad, y1 + 180, fill=self.C_LINE)

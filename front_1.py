@@ -544,7 +544,7 @@ class PetDashboard(tk.Tk):
                                fill=self.C_WHITE, tags=(chip_tag, "ts_header"))
             else:
                 _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
-                            fill="#E8DDD8", outline="", tags=(chip_tag, "ts_header"))
+                            fill="#FFFFFF", outline="", tags=(chip_tag, "ts_header"))
                 cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
                                font=("Baghdad", max(9, int(13 * self._s)), "bold"),
                                fill=self.C_TEXT, tags=(chip_tag, "ts_header"))
@@ -564,8 +564,6 @@ class PetDashboard(tk.Tk):
         # Re-scale these new items
         s = self._s
         cv.scale("ts_header", 0, 0, s, s)
-        for f in ["svc_filter_all", "svc_filter_done", "svc_filter_not_done"]:
-            cv.scale(f, 0, 0, s, s)
 
     def create_rounded_image(self, image_path, width, height, radius):
         s = self._s
@@ -704,7 +702,7 @@ class PetDashboard(tk.Tk):
                                fill=self.C_WHITE, tags=(chip_tag, "ts_header"))
             else:
                 _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
-                            fill="#E8DDD8", outline="", tags=(chip_tag, "ts_header"))
+                            fill="#FFFFFF", outline="", tags=(chip_tag, "ts_header"))
                 cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
                                font=("Baghdad", max(9, int(13 * self._s)), "bold"),
                                fill=self.C_TEXT, tags=(chip_tag, "ts_header"))
