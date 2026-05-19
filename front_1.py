@@ -231,8 +231,9 @@ class DashboardBackend:
             JOIN pets p ON p.pet_id = s.pet_id
             JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
             JOIN rooms r ON r.room_id = b.room_id
-            WHERE s.service_date = CURDATE()
-              AND bs.status_name IN ('booked', 'checked_in', 'completed')
+            WHERE bs.status_name IN ('checked_in', 'booked')
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
             ORDER BY s.status, p.pet_name
             LIMIT 6
             """
