@@ -60,11 +60,7 @@ class BookingHistoryBackend:
     def _format_owner(name):
         if not name:
             return "-"
-        parts = str(name).split()
-        if len(parts) <= 1:
-            return parts[0]
-        mid = max(1, len(parts) // 2)
-        return " ".join(parts[:mid]) + "\n" + " ".join(parts[mid:])
+        return str(name)
 
 
     @staticmethod
@@ -423,7 +419,7 @@ class BookingHistory(tk.Tk):
 
 
         # ── HEADER BAR ──
-        _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 70 + y, radius=20, fill=self.C_WHITE)
+        _round_rect(cv, 300 + dx, 25 + y, 1150 + dx, 75 + y, radius=20, fill=self.C_WHITE)
         cv.create_text(330 + dx, 50 + y, text="Booking",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
         today_str = datetime.now().strftime("%A, %d/%m/%Y")
@@ -432,12 +428,11 @@ class BookingHistory(tk.Tk):
 
 
         # Toggle: Bookings | History  (History = active/dark)
-        tgl_r = 18
-        # Active "History" pill
-        _round_rect(cv, 1010 + dx, 32 + y, 1145 + dx, 68 + y, radius=tgl_r, fill=self.C_TEXT)
-        cv.create_text(950 + dx, 50 + y, text="Bookings",
+        # Active "History" pill (enlarged for better spacing and aesthetics)
+        _round_rect(cv, 995 + dx, 28 + y, 1147 + dx, 72 + y, radius=22, fill=self.C_TEXT)
+        cv.create_text(935 + dx, 50 + y, text="Bookings",
                        font=self.F_TOGGLE_BTN, fill=self.C_TEXT)
-        cv.create_text(1077 + dx, 50 + y, text="History",
+        cv.create_text(1071 + dx, 50 + y, text="History",
                        font=self.F_TOGGLE_BTN, fill=self.C_WHITE)
 
 
@@ -479,16 +474,18 @@ class BookingHistory(tk.Tk):
 
         # ── TABLE CARD ──
         table_data = self.table_data
-        row_h = 80
+        
+        # Calculate dynamic table height based on service counts
+        total_rows_h = sum(80 if (len(row["services"]) > 1 and row["services"] != ["No service"]) else 52 for row in table_data)
         tbl_y1 = 315 + y
-        tbl_y2 = max(870 + y, tbl_y1 + 70 + max(len(table_data), 1) * row_h)
+        tbl_y2 = max(870 + y, tbl_y1 + 70 + max(total_rows_h, 52))
         _round_rect(cv, 300 + dx, tbl_y1, 1150 + dx, tbl_y2, radius=25, fill=self.C_WHITE)
 
 
         # Header
         hdr_y = tbl_y1 + 35
         cols = ["#", "Pet", "Owner", "Check in", "Check out", "Room", "Service", "Status"]
-        col_xs = [330 + dx, 368 + dx, 435 + dx, 535 + dx, 640 + dx, 730 + dx, 800 + dx, 960 + dx]
+        col_xs = [330 + dx, 370 + dx, 480 + dx, 695 + dx, 780 + dx, 865 + dx, 940 + dx, 1060 + dx]
 
 
         for col, cx in zip(cols, col_xs):
@@ -508,18 +505,21 @@ class BookingHistory(tk.Tk):
             return
 
 
+        current_y = hdr_y + 30
         for ri, row in enumerate(table_data):
-            ry = hdr_y + 30 + ri * row_h
-            cy = ry + row_h // 2
+            has_multiple_services = len(row["services"]) > 1 and row["services"] != ["No service"]
+            current_row_h = 80 if has_multiple_services else 52
+            ry = current_y
+            cy = ry + current_row_h // 2
 
 
             cv.create_text(col_xs[0], cy, text=row["num"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[1], cy, text=row["pet"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=62)
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=100)
             # Owner has newline — centre vertically between the two text lines
             cv.create_text(col_xs[2], cy, text=row["owner"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=86)
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=205)
             cv.create_text(col_xs[3], cy, text=row["checkin"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[4], cy, text=row["checkout"],
@@ -528,22 +528,29 @@ class BookingHistory(tk.Tk):
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
 
 
-            # Service chips stacked
-            chip_cx = col_xs[6] + 52
-            chip_y0 = cy - 24 if len(row["services"]) >= 3 else cy - 18
-            for ci, svc in enumerate(row["services"][:3]):
-                bg, fg = self._service_colors(svc, ci)
-                self._draw_chip(cv, chip_cx, chip_y0 + ci * 30, svc, bg, fg)
+            # Service chips
+            if has_multiple_services:
+                # Vertically stack for rows with multiple services
+                chip_cx = col_xs[6] + 52
+                chip_y0 = cy - 15
+                for ci, svc in enumerate(row["services"][:2]):
+                    bg, fg = self._service_colors(svc, ci)
+                    self._draw_chip(cv, chip_cx, chip_y0 + ci * 30, svc, bg, fg)
+            else:
+                bg, fg = self._service_colors(row["services"][0], 0)
+                self._draw_chip(cv, col_xs[6] + 52, cy, row["services"][0], bg, fg)
 
 
             cv.create_text(col_xs[7], cy, text=row["status"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=110)
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
 
 
             # Row divider (not after last row)
             if ri < len(table_data) - 1:
-                cv.create_line(325 + dx, ry + row_h - 1, 1130 + dx, ry + row_h - 1,
+                cv.create_line(325 + dx, ry + current_row_h - 1, 1130 + dx, ry + current_row_h - 1,
                                fill=self.C_DIVIDER, width=1)
+
+            current_y += current_row_h
 
 
 

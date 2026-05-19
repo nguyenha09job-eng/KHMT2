@@ -157,6 +157,7 @@ class RoomsDashboard(tk.Tk):
         self.F_IMG_LABEL   = ("Arial Rounded MT Bold", max(14, int(26 * s)), "bold")
 
         self.images = []
+        self.current_filter = "all"  # "all", "dog", or "cat"
         self.backend = RoomsBackend()
         self.data = self.load_rooms()
 
@@ -215,6 +216,20 @@ class RoomsDashboard(tk.Tk):
                 "summary": {"occupied": 0, "available": 0, "cleaning": 0, "total": 0},
                 "rooms": {"dog": [], "cat": [], "both": []},
             }
+
+    def set_filter(self, new_filter):
+        """Toggle filter: click same filter again → show all."""
+        if self.current_filter == new_filter:
+            self.current_filter = "all"
+        else:
+            self.current_filter = new_filter
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -344,22 +359,37 @@ class RoomsDashboard(tk.Tk):
         img_y = 82 + y
         img_h = 120
 
-        # Dog image
+        # Dog image (clickable filter)
         dog_path = os.path.join(_dir, "image", "dog_room.jpg")
         dog_tk = self.create_rounded_image(dog_path, 265, img_h, radius=16)
         self.images.append(dog_tk)
-        cv.create_image(300 + dx, img_y, image=dog_tk, anchor="nw")
-        # Label overlay
+        cv.create_image(300 + dx, img_y, image=dog_tk, anchor="nw", tags="filter_dog")
         cv.create_text(330 + dx, img_y + img_h - 22,
-                       text="Dog", font=self.F_IMG_LABEL, fill=self.C_WHITE, anchor="w")
+                       text="Dog", font=self.F_IMG_LABEL, fill=self.C_WHITE, anchor="w",
+                       tags="filter_dog")
+        cv.tag_bind("filter_dog", "<Button-1>", lambda e: self.set_filter("dog"))
 
-        # Cat image
+        # Cat image (clickable filter)
         cat_path = os.path.join(_dir, "image", "cat_room.jpg")
         cat_tk = self.create_rounded_image(cat_path, 265, img_h, radius=16)
         self.images.append(cat_tk)
-        cv.create_image(578 + dx, img_y, image=cat_tk, anchor="nw")
+        cv.create_image(578 + dx, img_y, image=cat_tk, anchor="nw", tags="filter_cat")
         cv.create_text(608 + dx, img_y + img_h - 22,
-                       text="Cat", font=self.F_IMG_LABEL, fill=self.C_WHITE, anchor="w")
+                       text="Cat", font=self.F_IMG_LABEL, fill=self.C_WHITE, anchor="w",
+                       tags="filter_cat")
+        cv.tag_bind("filter_cat", "<Button-1>", lambda e: self.set_filter("cat"))
+
+        # Active filter highlight border
+        border_w = 265
+        if self.current_filter == "dog":
+            bx = 300 + dx
+        elif self.current_filter == "cat":
+            bx = 578 + dx
+        else:
+            bx = None
+        if bx is not None:
+            cv.create_rectangle(bx - 3, img_y - 3, bx + border_w + 3, img_y + img_h + 3,
+                               outline=self.C_TEXT, width=4, tags="filter_border")
 
         # Legend box
         leg_x1, leg_y1 = 856 + dx, img_y
@@ -408,26 +438,28 @@ class RoomsDashboard(tk.Tk):
 
         # ── DOG SECTION ──
         sec_y = 270 + y
-        cv.create_text(300 + dx, sec_y, text="Dog",
-                       font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+        next_y = sec_y  # track vertical position
 
-        dog_grid_y = sec_y + 30
-        self._draw_room_grid(cv, dx, dog_grid_y, rooms["dog"])
+        if self.current_filter in ("all", "dog"):
+            cv.create_text(300 + dx, next_y, text="Dog",
+                           font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+            dog_grid_y = next_y + 30
+            self._draw_room_grid(cv, dx, dog_grid_y, rooms["dog"])
+            next_y = dog_grid_y + self._grid_height(len(rooms["dog"])) + 30
 
         # ── CAT SECTION ──
-        cat_sec_y = dog_grid_y + self._grid_height(len(rooms["dog"])) + 30
-        cv.create_text(300 + dx, cat_sec_y, text="Cat",
-                       font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
-
-        cat_grid_y = cat_sec_y + 30
-        self._draw_room_grid(cv, dx, cat_grid_y, rooms["cat"])
-
-        if rooms["both"]:
-            family_sec_y = cat_grid_y + self._grid_height(len(rooms["cat"])) + 30
-            cv.create_text(300 + dx, family_sec_y, text="Family",
+        if self.current_filter in ("all", "cat"):
+            cv.create_text(300 + dx, next_y, text="Cat",
                            font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+            cat_grid_y = next_y + 30
+            self._draw_room_grid(cv, dx, cat_grid_y, rooms["cat"])
+            next_y = cat_grid_y + self._grid_height(len(rooms["cat"])) + 30
 
-            family_grid_y = family_sec_y + 30
+        # ── FAMILY (both species) ── only when showing all
+        if self.current_filter == "all" and rooms["both"]:
+            cv.create_text(300 + dx, next_y, text="Family",
+                           font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+            family_grid_y = next_y + 30
             self._draw_room_grid(cv, dx, family_grid_y, rooms["both"])
 
     def _grid_height(self, n_rooms):

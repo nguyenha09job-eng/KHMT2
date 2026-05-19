@@ -240,6 +240,8 @@ class CareViewDashboard(tk.Tk):
 
     def set_filter(self, filter_name):
         self.current_filter = filter_name
+        for child in self.canvas.winfo_children():
+            child.destroy()
         self.canvas.delete("all")
         self.draw_header()
         self.draw_banner()
@@ -422,10 +424,10 @@ class CareViewDashboard(tk.Tk):
         banner_w, banner_h = 850, 200
         banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.2)
         self.images.append(banner_tk)
-        cv.create_image(300+dx, 75+y_off, image=banner_tk, anchor="nw")
+        cv.create_image(300+dx, 85+y_off, image=banner_tk, anchor="nw")
 
         # Quote overlay
-        cv.create_text(330+dx, 150+y_off,
+        cv.create_text(330+dx, 160+y_off,
                        text='"Sometimes the smallest things take up the\nmost room in your heart."',
                        font=self.F_QUOTE, fill=self.C_WHITE, anchor="w", justify="left")
 
@@ -438,9 +440,9 @@ class CareViewDashboard(tk.Tk):
         y_off = self.Y_OFF
 
         if not pets:
-            _round_rect(cv, 300+dx, 300+y_off, 1150+dx, 380+y_off, radius=24,
+            _round_rect(cv, 300+dx, 310+y_off, 1150+dx, 390+y_off, radius=24,
                         fill=self.C_CARD, outline="")
-            cv.create_text(725+dx, 340+y_off,
+            cv.create_text(725+dx, 350+y_off,
                            text="No checked-in pets found today",
                            font=self.F_TITLE, fill=self.C_TEXT)
             return
@@ -453,7 +455,7 @@ class CareViewDashboard(tk.Tk):
         gap_x = 15
         gap_y = 20
         start_x = 300 + dx
-        start_y = 300 + y_off
+        start_y = 310 + y_off
 
         for idx, pet in enumerate(pets):
             col = idx % cols
@@ -497,10 +499,10 @@ class CareViewDashboard(tk.Tk):
         tag_text = f"  {pet['weight']} - {pet['sex']} - {pet['breed']}  "
         tag_y1 = y1 + 80
         tag_y2 = y1 + 100
-        tag_x2 = lx + 170
+        tag_x2 = lx + 224
         _round_rect(cv, lx, tag_y1, tag_x2, tag_y2, radius=10,
                     fill=self.C_TAG, outline="")
-        cv.create_text(lx + 85, (tag_y1+tag_y2)/2, text=tag_text,
+        cv.create_text(lx + 112, (tag_y1+tag_y2)/2, text=tag_text,
                        font=self.F_CARD_TAG, fill=self.C_TEXT)
 
         # Tag: Sterilized
@@ -539,9 +541,13 @@ class CareViewDashboard(tk.Tk):
         # Divider
         cv.create_line(lx, y1 + 215, x2 - pad, y1 + 215, fill=self.C_LINE)
 
-        # Special requirement
-        cv.create_text(lx, y1 + 233, text=f"Special: {pet['special']}",
-                       font=self.F_CARD_INFO, fill=self.C_TEXT, anchor="w")
+        # Special requirement (flat Text widget for word wrapping and vertical scrolling if needed)
+        text_widget = tk.Text(cv, bd=0, relief="flat", highlightthickness=0,
+                              bg=self.C_CARD, fg=self.C_TEXT, font=self.F_CARD_INFO,
+                              wrap="word")
+        text_widget.insert("1.0", f"Special: {pet['special']}")
+        text_widget.config(state="disabled")
+        cv.create_window(lx, y1 + 224, window=text_widget, anchor="nw", width=224, height=38)
 
 
 if __name__ == "__main__":

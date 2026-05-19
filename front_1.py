@@ -634,9 +634,9 @@ class PetDashboard(tk.Tk):
         ]
         ab_rel_xs = [45, 155, 285, 425, 560, 685]
         ab_x = int((300 + dx + 20) * s)
-        ab_y = int((475 + y_off) * s)
+        ab_y = int((456 + y_off) * s)
         ab_w = int(810 * s)
-        ab_h = int(185 * s)
+        ab_h = int(200 * s)
         self._make_scrollable_table(ab_x, ab_y, ab_w, ab_h, ab_data, ab_rel_xs, row_h)
 
         # ---- Today's Services rows ----
@@ -646,9 +646,9 @@ class PetDashboard(tk.Tk):
         ]
         ts_rel_xs = [45, 155, 285, 445, 585]
         ts_x = int((300 + dx + 20) * s)
-        ts_y = int((790 + y_off) * s)
+        ts_y = int((771 + y_off) * s)
         ts_w = int(810 * s)
-        ts_h = int(190 * s)
+        ts_h = int(205 * s)
         self._make_scrollable_table(ts_x, ts_y, ts_w, ts_h, ts_data, ts_rel_xs, row_h)
 
     def _make_scrollable_table(self, x, y, w, h, data, rel_xs, row_h):

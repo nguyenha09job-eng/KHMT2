@@ -5,8 +5,179 @@ import os
 import sys
 from datetime import datetime
 from decimal import Decimal
+import unicodedata
 
 from database import DatabaseConnection
+
+
+_HCMC_DISTRICTS = [
+    "Quận 1", "Quận 2", "Quận 3", "Quận 4", "Quận 5", "Quận 6",
+    "Quận 7", "Quận 8", "Quận 9", "Quận 10", "Quận 11", "Quận 12",
+    "Quận Bình Tân", "Quận Tân Phú", "Quận Tân Bình", "Quận Gò Vấp",
+    "Quận Bình Thạnh", "Quận Phú Nhuận",
+    "Thành phố Thủ Đức",
+    "Huyện Bình Chánh", "Huyện Hóc Môn", "Huyện Củ Chi",
+    "Huyện Nhà Bè", "Huyện Cần Giờ",
+]
+
+_HCMC_STREETS = [
+    "Nguyễn Huệ", "Lê Lợi", "Đồng Khởi", "Hai Bà Trưng", "Lý Tự Trọng",
+    "Nguyễn Đình Chiểu", "Nam Kỳ Khởi Nghĩa", "Điện Biên Phủ", "Võ Văn Tần",
+    "Phạm Ngọc Thạch", "Nguyễn Thị Minh Khai", "Phan Đình Phùng",
+    "Nguyễn Văn Cừ", "Trần Hưng Đạo", "Trần Quang Khải", "Nguyễn Thái Học",
+    "Lê Duẩn", "Lý Thường Kiệt", "Nguyễn Thượng Hiền", "Nguyễn Thông",
+    "Nguyễn Công Trứ", "Lê Lai", "Trần Bình Trọng", "Bùi Viện", "Đề Thám",
+    "Cô Bắc", "Cô Giang", "Phạm Hồng Thái", "Tôn Thất Tùng",
+    "Nguyễn Cư Trinh", "Nguyễn Thị Nghĩa", "Lê Thạch",
+    "Cách Mạng Tháng Tám", "Trường Chinh", "Hoàng Văn Thụ",
+    "Nguyễn Thái Sơn", "Phạm Ngũ Lão", "Nguyễn Trãi",
+    "Nguyễn Văn Trỗi", "Ngô Gia Tự", "Lê Văn Sỹ",
+    "Nguyễn Trọng Tuyển", "Phạm Văn Bạch", "Nguyễn Chí Thanh",
+    "Trần Duy Hưng", "Nguyễn Khánh Toàn",
+    "Xa Lộ Hà Nội", "Phạm Văn Đồng", "Nguyễn Văn Linh",
+    "Võ Duy Ninh", "Nguyễn Duy Trinh", "Lê Văn Việt", "Đỗ Xuân Hợp",
+    "Lê Quang Định", "Phan Đăng Lưu", "Lương Định Của",
+    "Nguyễn Thị Định", "Nguyễn Cơ Thạch",
+    "Trường Sơn", "Trần Quốc Hoàn", "Cộng Hòa", "Hoàng Hoa Thám",
+    "Tân Kỳ Tân Quý", "Âu Cơ", "Lạc Long Quân", "An Dương Vương",
+    "Nguyễn Lương Bằng", "Phạm Hữu Lầu", "Nguyễn Bình",
+    "Huỳnh Tấn Phát", "Nguyễn Hữu Thọ", "Tạ Quang Bửu",
+    "Võ Chí Công", "Kha Vạn Cân", "Tô Ngọc Vân", "Trần Não",
+    "Hồng Bàng", "Hùng Vương", "Nguyễn Tri Phương", "Trần Phú",
+    "Trần Quang Diệu", "Nguyễn Văn Đậu", "Phan Văn Hớn",
+    "Phùng Hưng", "Bùi Thị Xuân", "Nguyễn Văn Tố", "Lò Gốm",
+    "Võ Văn Kiệt", "Nguyễn Tất Thành", "Kinh Dương Vương",
+    "Quốc Lộ 1", "Quốc Lộ 13", "Quốc Lộ 22", "Quốc Lộ 50",
+    "Quang Trung", "Nguyễn Thái Sơn",
+]
+
+# District → streets mapping for address validation
+_HCMC_STREETS_BY_DISTRICT = {
+    "Quận 1": [
+        "Nguyễn Huệ", "Lê Lợi", "Đồng Khởi", "Hai Bà Trưng", "Lý Tự Trọng",
+        "Nguyễn Đình Chiểu", "Nam Kỳ Khởi Nghĩa", "Võ Văn Tần", "Phạm Ngọc Thạch",
+        "Nguyễn Thị Minh Khai", "Phan Đình Phùng", "Nguyễn Văn Cừ", "Trần Hưng Đạo",
+        "Trần Quang Khải", "Nguyễn Thái Học", "Lê Duẩn", "Lý Thường Kiệt",
+        "Nguyễn Thượng Hiền", "Nguyễn Thông", "Nguyễn Công Trứ", "Lê Lai",
+        "Trần Bình Trọng", "Bùi Viện", "Đề Thám", "Cô Bắc", "Cô Giang",
+        "Phạm Hồng Thái", "Tôn Thất Tùng", "Nguyễn Cư Trinh", "Nguyễn Thị Nghĩa",
+        "Lê Thạch", "Phạm Phú Thứ", "Tôn Thất Thuyết", "Yersin", "Ký Con",
+        "Nguyễn Văn Ngọc", "Điện Biên Phủ", "Phạm Ngũ Lão",
+    ],
+    "Quận 3": [
+        "Cách Mạng Tháng Tám", "Trường Chinh", "Hoàng Văn Thụ", "Nguyễn Thái Sơn",
+        "Phạm Ngũ Lão", "Nguyễn Trãi", "Nguyễn Văn Trỗi", "Ngô Gia Tự",
+        "Lê Văn Sỹ", "Trần Văn Đang", "Nguyễn Trọng Tuyển", "Phạm Văn Bạch",
+        "Phan Huy Chú", "Văn Cao", "Tô Hiệu", "Nguyễn Sơn", "Nguyễn Kiệm",
+        "Phan Văn Trị", "Trần Quốc Hoàn", "Nguyễn Phúc Nguyên",
+        "Nguyễn Chí Thanh", "Hoàng Minh Giám", "Nguyễn Khánh Toàn",
+        "Trần Duy Hưng", "Điện Biên Phủ", "Nguyễn Đình Chiểu",
+    ],
+    "Quận 5": [
+        "Trần Hưng Đạo", "Hồng Bàng", "Hùng Vương", "Nguyễn Tri Phương",
+        "Trần Phú", "Nguyễn Trãi", "Châu Văn Liêm", "Phan Huy Ích",
+        "Phùng Hưng", "Bùi Thị Xuân", "Nguyễn Văn Tố", "Lò Gốm",
+        "Ngô Văn Năm", "Lê Quang Sung",
+    ],
+    "Quận 6": [
+        "Hồng Bàng", "Hùng Vương", "Kinh Dương Vương", "Lạc Long Quân",
+        "Phạm Văn Chí", "Nguyễn Văn Luông",
+    ],
+    "Quận 10": [
+        "Cách Mạng Tháng Tám", "Lý Thường Kiệt", "Nguyễn Tri Phương",
+        "Trần Phú", "Nguyễn Chí Thanh", "Lê Hồng Phong", "Sư Vạn Hạnh",
+        "Ngô Gia Tự", "Lý Thái Tổ",
+    ],
+    "Quận 11": [
+        "Trần Hưng Đạo", "Hồng Bàng", "Lạc Long Quân", "Âu Cơ",
+        "Nguyễn Thị Nhỏ", "Bình Thới", "Hàn Hải Nguyên",
+    ],
+    "Quận 7": [
+        "Nguyễn Văn Linh", "Nguyễn Lương Bằng", "Phạm Hữu Lầu",
+        "Nguyễn Bình", "Lê Văn Lương", "Nguyễn Thị Thập",
+        "Huỳnh Tấn Phát", "Nguyễn Văn Tạo", "Nguyễn Hữu Thọ",
+        "Tạ Quang Bửu", "Phan Văn Đáng", "Ca Văn Thỉnh",
+        "Trần Xuân Soạn", "Nguyễn Cơ Thạch",
+    ],
+    "Bình Thạnh": [
+        "Điện Biên Phủ", "Xa Lộ Hà Nội", "Phạm Văn Đồng", "Nguyễn Văn Linh",
+        "Võ Duy Ninh", "Nguyễn Duy Trinh", "Lê Văn Việt", "Đỗ Xuân Hợp",
+        "Nguyễn Xí", "Ngô Tất Tố", "Lê Quang Định", "Phan Đăng Lưu",
+        "Phan Chu Trinh", "Lương Định Của", "Huyền Trân Công Chúa",
+        "Nguyễn Thị Định", "Nguyễn Cơ Thạch", "Trần Quang Diệu",
+        "Nguyễn Văn Đậu", "Phan Văn Hớn",
+    ],
+    "Tân Bình": [
+        "Trường Sơn", "Trần Quốc Hoàn", "Cộng Hòa", "Hoàng Hoa Thám",
+        "Tân Kỳ Tân Quý", "Âu Cơ", "Lạc Long Quân", "An Dương Vương",
+        "Thụy Khuê", "Lê Văn Sỹ", "Phạm Văn Bạch", "Trần Văn Đang",
+        "Nguyễn Trọng Tuyển",
+    ],
+    "Tân Phú": [
+        "Tân Kỳ Tân Quý", "Lạc Long Quân", "Âu Cơ", "Kinh Dương Vương",
+        "Lũy Bán Bích", "Trương Vĩnh Ký", "Thoại Ngọc Hầu",
+    ],
+    "Bình Tân": [
+        "Kinh Dương Vương", "Hồ Học Lãm", "Tên Lửa", "Trần Văn Kiểu",
+        "Lê Văn Quới", "Mã Lò", "Bình Trị Đông",
+    ],
+    "Gò Vấp": [
+        "Quang Trung", "Nguyễn Thái Sơn", "Phan Văn Trị", "Nguyễn Kiệm",
+        "Lê Đức Thọ", "Nguyễn Văn Lượng", "Dương Quảng Hàm",
+    ],
+    "Phú Nhuận": [
+        "Phan Đăng Lưu", "Nguyễn Văn Trỗi", "Nguyễn Đình Chiểu",
+        "Trần Huy Liệu", "Hoàng Văn Thụ", "Huỳnh Văn Bánh",
+        "Lê Văn Sỹ", "Trần Văn Đang",
+    ],
+    "Thủ Đức": [
+        "Xa Lộ Hà Nội", "Võ Chí Công", "Phạm Văn Đồng", "Đỗ Xuân Hợp",
+        "Nguyễn Duy Trinh", "Lê Văn Việt", "Kha Vạn Cân", "Tô Ngọc Vân",
+        "Trần Não", "Nguyễn Văn Hưởng", "Nguyễn Thị Định",
+        "Hoàng Diệu", "Đặng Văn Bi", "Linh Trung",
+    ],
+    "Bình Chánh": [
+        "Quốc Lộ 1", "Nguyễn Văn Linh", "Võ Văn Kiệt", "Kinh Dương Vương",
+        "Trần Đại Nghĩa", "Đoàn Nguyễn Tuân",
+    ],
+    "Hóc Môn": [
+        "Quốc Lộ 22", "Nguyễn Ảnh Thủ", "Lê Lợi", "Lý Thường Kiệt",
+        "Đặng Thúc Vịnh", "Trần Văn Mười",
+    ],
+    "Quận 2": [
+        "Mai Chí Thọ", "Trần Não", "Lương Định Của", "Huyền Trân Công Chúa",
+        "Nguyễn Thị Định", "Nguyễn Cơ Thạch",
+    ],
+    "Quận 4": [
+        "Võ Văn Kiệt", "Nguyễn Tất Thành", "Tôn Thất Thuyết",
+        "Trần Văn Khéo", "Khánh Hội",
+    ],
+    "Quận 8": [
+        "Nguyễn Văn Linh", "Phạm Thế Hiển", "Hưng Phú", "Bến Bình Đông",
+        "Tùng Thiện Vương", "Cao Lỗ",
+    ],
+    "Quận 9": [
+        "Lê Văn Việt", "Đỗ Xuân Hợp", "Kha Vạn Cân", "Nguyễn Duy Trinh",
+        "Võ Văn Hát", "Lã Xuân Oai",
+    ],
+    "Quận 12": [
+        "Quốc Lộ 1", "Trường Chinh", "Hà Huy Giáp", "Lê Văn Khương",
+        "Nguyễn Ảnh Thủ", "Tô Ký",
+    ],
+    "Nhà Bè": [
+        "Nguyễn Văn Tạo", "Huỳnh Tấn Phát", "Lê Văn Lương",
+        "Nguyễn Thị Thập", "Phạm Hữu Lầu",
+    ],
+    "Củ Chi": [
+        "Quốc Lộ 22", "Tỉnh Lộ 8", "Nguyễn Văn Khạ",
+        "Quốc Lộ 1", "Hà Huy Giáp",
+    ],
+    "Cần Giờ": [
+        "Đồng Đình", "Duyên Hải", "Lương Văn Nho",
+        "Trần Quang Diệu",
+    ],
+}
+
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     d = 2 * radius
@@ -19,6 +190,18 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='pieslice', **kwargs))
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
+
+
+def _addr_extract(text):
+    """Split address text into (number_prefix, street_name) for autocomplete."""
+    tokens = text.split()
+    for i, tok in enumerate(tokens):
+        if not any(c.isdigit() for c in tok):
+            prefix = " ".join(tokens[:i])
+            search = " ".join(tokens[i:])
+            return (prefix + " " if prefix else "", search)
+    # All tokens contain digits or empty → no street name yet
+    return (text + " " if text.strip() else "", "")
 
 
 class BookingBackend:
@@ -585,11 +768,65 @@ class BookingDashboard(tk.Tk):
         row1.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
         self._add_labeled_entry(row1, "Phone number", "ex: 012345678", side=tk.LEFT, expand=True, key="phone")
         self._add_labeled_entry(row1, "Full Name", "ex: Thuy Hang", side=tk.LEFT, expand=True, key="full_name")
+        # Phone validation indicator
+        phone_entry = self.entries["phone"]
+        phone_err = tk.Label(phone_entry.master.master, text="SĐT không hợp lệ",
+                             font=self.F_LABEL, bg=self.C_CARD_BG, fg="#E74C3C")
+        def _validate_phone(_event=None):
+            val = phone_entry.get()
+            ph = self.placeholders.get("phone", "")
+            if val == ph or not val.strip():
+                phone_err.pack_forget()
+            elif len(val) == 10 and val.startswith("0") and val.isdigit():
+                phone_err.pack_forget()
+            else:
+                phone_err.pack(anchor="w")
+        phone_entry.bind("<KeyRelease>", _validate_phone, add="+")
+        phone_entry.bind("<<Paste>>", _validate_phone, add="+")
 
         row2 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row2.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
         self._add_labeled_entry(row2, "Street address", "ex: 45 Nguyen Thi Minh Khai", side=tk.LEFT, expand=True, key="address")
         self._add_labeled_entry(row2, "District", "Quan 3", side=tk.LEFT, key="district")
+        # Autocomplete suggestions for HCMC locations
+        self._add_autocomplete("address", _HCMC_STREETS, extract=_addr_extract)
+        self._add_autocomplete("district", _HCMC_DISTRICTS)
+        # Address-district validation
+        addr_entry = self.entries["address"]
+        addr_err = tk.Label(addr_entry.master.master, text="Địa chỉ không hợp lệ",
+                             font=self.F_LABEL, bg=self.C_CARD_BG, fg="#E74C3C")
+        district_entry = self.entries["district"]
+
+        def _validate_address(_event=None):
+            addr_val = addr_entry.get()
+            addr_ph = self.placeholders.get("address", "")
+            dist_val = district_entry.get()
+            dist_ph = self.placeholders.get("district", "")
+            _, street = _addr_extract(addr_val)
+            if (addr_val == addr_ph or not addr_val.strip() or not street.strip()
+                    or dist_val == dist_ph or not dist_val.strip()):
+                addr_err.pack_forget()
+                return
+
+            def _norm(t):
+                return unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('ascii').lower()
+
+            n_street = _norm(street)
+            n_dist = _norm(dist_val)
+            valid = [s for d, streets in _HCMC_STREETS_BY_DISTRICT.items()
+                     if _norm(d) == n_dist for s in streets]
+            if not valid:
+                addr_err.pack_forget()
+                return
+            if n_street in [_norm(s) for s in valid]:
+                addr_err.pack_forget()
+            else:
+                addr_err.pack(anchor="w")
+
+        addr_entry.bind("<KeyRelease>", _validate_address, add="+")
+        addr_entry.bind("<<AutocompleteConfirm>>", _validate_address, add="+")
+        district_entry.bind("<KeyRelease>", _validate_address, add="+")
+        district_entry.bind("<<AutocompleteConfirm>>", _validate_address, add="+")
 
         mem_frame = tk.Frame(form_frame, bg=self.C_CARD_BG)
         mem_frame.pack(fill=tk.X, padx=form_pad, pady=(0, int(12*s)))
@@ -768,6 +1005,151 @@ class BookingDashboard(tk.Tk):
         if value == placeholder:
             return ""
         return value
+
+    def _add_autocomplete(self, entry_key, suggestions, extract=None):
+        """Add autocomplete dropdown to an entry.
+
+        Args:
+            entry_key: key in self.entries
+            suggestions: list of suggestion strings
+            extract: optional callable(typed_text) -> (prefix, search_term)
+                     prefix is prepended back on confirm (e.g. house number)
+        """
+        entry = self.entries.get(entry_key)
+        if not entry:
+            return
+
+        if extract is None:
+            extract = lambda t: ("", t)
+
+        def _norm(t):
+            return unicodedata.normalize('NFKD', t).encode('ascii', 'ignore').decode('ascii').lower()
+
+        state = {"win": None, "lb": None, "sel": -1, "prefix": ""}
+
+        def hide():
+            if state["win"]:
+                state["win"].destroy()
+                state["win"] = None
+                state["lb"] = None
+            state["sel"] = -1
+
+        def show(matches):
+            hide()
+            win = tk.Toplevel(self)
+            win.wm_overrideredirect(True)
+            win.configure(bg=self.C_BORDER)
+            win.attributes("-topmost", True)
+
+            lb = tk.Listbox(win, font=self.F_INPUT, relief=tk.FLAT,
+                            bg="white", fg=self.C_TEXT,
+                            selectbackground=self.C_ACTIVE,
+                            selectforeground="white",
+                            highlightthickness=0, borderwidth=0,
+                            activestyle="none", cursor="hand2")
+            lb.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+            for m in matches:
+                lb.insert(tk.END, m)
+
+            entry.update_idletasks()
+            x = entry.winfo_rootx()
+            y = entry.winfo_rooty() + entry.winfo_height()
+            w = max(entry.master.winfo_width(), 200)
+            ih = min(len(matches), 6) * 24 + 4
+            win.geometry(f"{w}x{ih}+{x}+{y}")
+            win.lift()
+
+            def on_click(_event=None):
+                if lb.curselection():
+                    val = lb.get(lb.curselection()[0])
+                    entry.delete(0, tk.END)
+                    entry.insert(0, state["prefix"] + val)
+                    entry.config(fg=self.C_TEXT)
+                    entry.event_generate("<<AutocompleteConfirm>>")
+                    hide()
+
+            lb.bind("<ButtonRelease-1>", on_click)
+            state["win"] = win
+            state["lb"] = lb
+            state["sel"] = -1
+
+        def select(delta):
+            if not state["lb"]:
+                return
+            sz = state["lb"].size()
+            if sz == 0:
+                return
+            n = state["sel"] + delta
+            n = max(0, min(n, sz - 1))
+            state["lb"].selection_clear(0, sz - 1)
+            state["lb"].selection_set(n)
+            state["lb"].activate(n)
+            state["sel"] = n
+
+        def confirm():
+            if state["lb"] and state["sel"] >= 0:
+                val = state["lb"].get(state["sel"])
+                entry.delete(0, tk.END)
+                entry.insert(0, state["prefix"] + val)
+                entry.config(fg=self.C_TEXT)
+            entry.event_generate("<<AutocompleteConfirm>>")
+            hide()
+
+        def on_keyrelease(event):
+            if event.keysym == "Down":
+                if not state["lb"]:
+                    typed = entry.get()
+                    ph = self.placeholders.get(entry_key, "")
+                    if typed.strip() and typed != ph:
+                        prefix, search = extract(typed)
+                        if search.strip():
+                            matches = [s for s in suggestions if _norm(search) in _norm(s)]
+                            if matches:
+                                state["prefix"] = prefix
+                                show(matches)
+                                select(0)
+                else:
+                    select(1)
+                return "break"
+            elif event.keysym == "Up":
+                if state["lb"]:
+                    select(-1)
+                return "break"
+            elif event.keysym == "Return":
+                confirm()
+                return "break"
+            elif event.keysym == "Escape":
+                hide()
+                return "break"
+            elif event.keysym in ("Tab", "Shift_L", "Shift_R", "Control_L", "Control_R",
+                                 "Alt_L", "Alt_R", "Caps_Lock", "Meta_L", "Meta_R",
+                                 "Left", "Right"):
+                return
+
+            typed = entry.get()
+            ph = self.placeholders.get(entry_key, "")
+            if not typed.strip() or typed == ph:
+                hide()
+                return
+
+            prefix, search = extract(typed)
+            if not search.strip():
+                hide()
+                return
+
+            matches = [s for s in suggestions if _norm(search) in _norm(s)]
+            if matches:
+                state["prefix"] = prefix
+                show(matches)
+                select(0)
+            else:
+                hide()
+
+        def on_focusout(_event):
+            entry.after(200, hide)
+
+        entry.bind("<KeyRelease>", on_keyrelease, add="+")
+        entry.bind("<FocusOut>", on_focusout, add="+")
 
     def _clear_placeholder(self, entry, placeholder):
         if entry.get() == placeholder:
