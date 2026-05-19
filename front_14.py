@@ -4,6 +4,275 @@ import os
 import sys
 import math
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
+
+
+class ReportBackend:
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _money(value):
+        if value is None:
+            value = 0
+        if isinstance(value, Decimal):
+            value = int(value)
+        return f"{int(value):,}đ"
+
+    @staticmethod
+    def _money_million(value):
+        if value is None:
+            value = 0
+        amount = float(value)
+        million = amount / 1_000_000
+        return f"{million:.1f}".rstrip("0").rstrip(".") + "M"
+
+    @staticmethod
+    def _pct(value):
+        return f"{float(value or 0):.0f}%"
+
+    def _period_condition(self):
+        filters = {
+            "Today": "DATE(COALESCE(bl.payment_date, b.check_out)) = CURDATE()",
+            "This week": "YEARWEEK(COALESCE(bl.payment_date, b.check_out), 1) = YEARWEEK(CURDATE(), 1)",
+            "This month": "YEAR(COALESCE(bl.payment_date, b.check_out)) = YEAR(CURDATE()) "
+                          "AND MONTH(COALESCE(bl.payment_date, b.check_out)) = MONTH(CURDATE())",
+            "Last month": "YEAR(COALESCE(bl.payment_date, b.check_out)) = YEAR(DATE_SUB(CURDATE(), INTERVAL 1 MONTH)) "
+                          "AND MONTH(COALESCE(bl.payment_date, b.check_out)) = MONTH(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))",
+        }
+        return filters.get(self.active_tab, filters["This week"])
+
+    def get_data(self, active_tab="This week"):
+        self.active_tab = active_tab
+        try:
+            return {
+                "today": datetime.now().strftime("%d/%m/%Y"),
+                "range": self.get_range_label(),
+                "bar_title": f"Revenue Trend - {active_tab}",
+                "bar_data": self.get_revenue_trend(),
+                "stats": self.get_stats(),
+                "service_segments": self.get_service_segments(),
+                "membership_segments": self.get_membership_segments(),
+                "payment_methods": self.get_payment_methods(),
+                "discounts": self.get_discounts(),
+            }
+        except Exception as exc:
+            print(f"Report backend error: {exc}")
+            return self.fallback_data(active_tab)
+
+    def get_range_label(self):
+        row = self.db.fetch_one(
+            f"""
+            SELECT
+                MIN(DATE(COALESCE(bl.payment_date, b.check_out))) AS start_date,
+                MAX(DATE(COALESCE(bl.payment_date, b.check_out))) AS end_date
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE {self._period_condition()}
+            """
+        ) or {}
+        start = row.get("start_date")
+        end = row.get("end_date")
+        return {
+            "start": start.strftime("%d/%m/%Y") if start else "-",
+            "end": end.strftime("%d/%m/%Y") if end else "-",
+        }
+
+    def get_revenue_trend(self):
+        if self.active_tab == "Today":
+            return self._revenue_by_hour()
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                DATE(COALESCE(bl.payment_date, b.check_out)) AS report_date,
+                COALESCE(SUM(bl.total_amount), 0) AS revenue
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE {self._period_condition()}
+            GROUP BY DATE(COALESCE(bl.payment_date, b.check_out))
+            ORDER BY report_date
+            """
+        )
+        data = []
+        for row in rows or []:
+            label = row["report_date"].strftime("%d/%m")
+            data.append((label, round(float(row.get("revenue") or 0) / 1_000_000, 1)))
+        return data or [("-", 0)]
+
+    def _revenue_by_hour(self):
+        rows = self.db.fetch_all(
+            """
+            SELECT HOUR(COALESCE(bl.payment_date, b.check_out)) AS hour,
+                   COALESCE(SUM(bl.total_amount), 0) AS revenue
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE DATE(COALESCE(bl.payment_date, b.check_out)) = CURDATE()
+            GROUP BY HOUR(COALESCE(bl.payment_date, b.check_out))
+            ORDER BY hour
+            """
+        )
+        return [(f"{int(row['hour']):02d}h", round(float(row.get("revenue") or 0) / 1_000_000, 1))
+                for row in rows or []] or [("-", 0)]
+
+    def get_stats(self):
+        row = self.db.fetch_one(
+            f"""
+            SELECT
+                COALESCE(SUM(bl.total_amount), 0) AS total_revenue,
+                COUNT(bl.payment_id) AS transactions,
+                COALESCE(AVG(bl.total_amount), 0) AS avg_order
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE {self._period_condition()}
+            """
+        ) or {}
+        occupancy = self.db.fetch_one(
+            f"""
+            SELECT
+                COUNT(DISTINCT b.room_id) AS occupied_rooms,
+                (SELECT COUNT(*) FROM rooms WHERE is_active = 1 OR is_active = b'1') AS total_rooms
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE {self._period_condition()}
+            """
+        ) or {}
+        total_rooms = int(occupancy.get("total_rooms") or 0)
+        occupied = int(occupancy.get("occupied_rooms") or 0)
+        occ_pct = round((occupied / total_rooms) * 100) if total_rooms else 0
+        return [
+            ("Total Revenue", self._money_million(row.get("total_revenue")), "current period"),
+            ("Transactions", str(int(row.get("transactions") or 0)), f"avg {self._money(row.get('avg_order'))} / order"),
+            ("Room Occupancy", f"{occ_pct}%", f"{occupied}/{total_rooms} rooms"),
+        ]
+
+    def _segments_from_rows(self, rows, label_key, value_key, palette):
+        total = sum(float(row.get(value_key) or 0) for row in rows or [])
+        if total <= 0:
+            return [(100, "#C8C8C8", "No data\n100%")]
+        segments = []
+        for idx, row in enumerate(rows or []):
+            value = float(row.get(value_key) or 0)
+            pct = round(value / total * 100)
+            label = str(row.get(label_key) or "Other").title()
+            segments.append((pct, palette[idx % len(palette)], f"{label}\n{pct}%"))
+        return segments
+
+    def get_service_segments(self):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT service_type, SUM(revenue) AS revenue
+            FROM (
+                SELECT 'Room Stay' AS service_type, COALESCE(SUM(b.room_price), 0) AS revenue
+                FROM bookings b
+                LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+                WHERE {self._period_condition()}
+                UNION ALL
+                SELECT sc.service_type, COALESCE(SUM(s.total_price), 0) AS revenue
+                FROM services s
+                JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
+                JOIN bookings b ON b.booking_id = s.booking_id
+                LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+                WHERE {self._period_condition()}
+                GROUP BY sc.service_type
+            ) revenue_parts
+            GROUP BY service_type
+            ORDER BY revenue DESC
+            LIMIT 4
+            """
+        )
+        return self._segments_from_rows(rows, "service_type", "revenue",
+                                        ["#C8E066", "#F4A0B0", "#60C0B8", "#E8A040"])
+
+    def get_membership_segments(self):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT COALESCE(cp.membership_type, 'Non - VIP') AS membership, COALESCE(SUM(bl.total_amount), 0) AS revenue
+            FROM bookings b
+            JOIN customers c ON c.customer_id = b.customer_id
+            LEFT JOIN customer_points cp ON cp.customer_id = c.customer_id
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE {self._period_condition()}
+            GROUP BY COALESCE(cp.membership_type, 'Non - VIP')
+            ORDER BY revenue DESC
+            """
+        )
+        return self._segments_from_rows(rows, "membership", "revenue", ["#C8E066", "#C8C8C8", "#F4A0B0"])
+
+    def get_payment_methods(self):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT COALESCE(pm.method_name, 'Unknown') AS method, COUNT(*) AS count
+            FROM bookings b
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
+            WHERE {self._period_condition()} AND bl.payment_id IS NOT NULL
+            GROUP BY COALESCE(pm.method_name, 'Unknown')
+            ORDER BY count DESC
+            """
+        )
+        total = sum(int(row.get("count") or 0) for row in rows or [])
+        if not total:
+            return [("No data", 1.0, "#C8C8C8")]
+        colors = ["#F4A0B0", "#60C0B8", "#E8A040", "#C8E066"]
+        return [
+            (str(row.get("method") or "Unknown").title(), int(row.get("count") or 0) / total, colors[idx % len(colors)])
+            for idx, row in enumerate(rows)
+        ]
+
+    def get_discounts(self, limit=3):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                b.booking_id,
+                c.full_name,
+                bl.total_amount,
+                COALESCE(bl.discount_amount, 0) AS discount_amount,
+                COALESCE(cp.membership_type, 'Standard') AS membership
+            FROM billing bl
+            JOIN bookings b ON b.booking_id = bl.booking_id
+            JOIN customers c ON c.customer_id = b.customer_id
+            LEFT JOIN customer_points cp ON cp.customer_id = c.customer_id
+            WHERE COALESCE(bl.discount_amount, 0) > 0
+              AND {self._period_condition()}
+            ORDER BY bl.discount_amount DESC, bl.payment_date DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        data = []
+        for row in rows or []:
+            final_paid = int(row.get("total_amount") or 0)
+            discount = int(row.get("discount_amount") or 0)
+            original = final_paid + discount
+            membership = str(row.get("membership") or "Standard").title()
+            is_vip = "vip" in membership.lower() or "premium" in membership.lower()
+            data.append((
+                f"#{row.get('booking_id')}",
+                row.get("full_name") or "-",
+                self._money(original),
+                f"-{self._money(discount)}",
+                membership,
+                self._money(final_paid),
+                "#D4EDBA" if is_vip else "#F9D0D8",
+                "#5A8A1A" if is_vip else "#C05070",
+                discount,
+            ))
+        return data
+
+    def fallback_data(self, active_tab):
+        return {
+            "today": datetime.now().strftime("%d/%m/%Y"),
+            "range": {"start": "-", "end": "-"},
+            "bar_title": f"Revenue Trend - {active_tab}",
+            "bar_data": [("-", 0)],
+            "stats": [("Total Revenue", "0M", ""), ("Transactions", "0", ""), ("Room Occupancy", "0%", "")],
+            "service_segments": [(100, "#C8C8C8", "No data\n100%")],
+            "membership_segments": [(100, "#C8C8C8", "No data\n100%")],
+            "payment_methods": [("No data", 1.0, "#C8C8C8")],
+            "discounts": [],
+        }
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -88,6 +357,8 @@ class ReportDashboard(tk.Tk):
         self.F_CHIP        = ("Baghdad", max(9,  int(12 * s)), "bold")
 
         self.images = []
+        self.backend = ReportBackend()
+        self.report_data = self.backend.get_data(self._active_tab)
 
         main = tk.Frame(self, bg=self.C_BG)
         main.pack(fill=tk.BOTH, expand=True)
@@ -233,7 +504,7 @@ class ReportDashboard(tk.Tk):
         chart_y1 = y1 + pad_t
         chart_y2 = y2 - pad_b
 
-        max_val   = max(v for _, v in data)
+        max_val   = max(max(v for _, v in data), 1)
         n         = len(data)
         bar_gap   = 14
         bar_w     = (chart_x2 - chart_x1 - bar_gap * (n - 1)) / n
@@ -245,11 +516,12 @@ class ReportDashboard(tk.Tk):
                        angle=90)
 
         # Y grid lines and labels
-        for val in [0, 20, 40, 60, 80]:
+        step = max_val / 4
+        for val in [0, step, step * 2, step * 3, max_val]:
             gy = chart_y2 - (val / max_val) * chart_h
             cv.create_line(chart_x1, gy, chart_x2, gy,
                            fill="#E8E0D8", dash=(4, 4))
-            cv.create_text(chart_x1 - 6, gy, text=str(val),
+            cv.create_text(chart_x1 - 6, gy, text=f"{val:g}",
                            font=self.F_AXIS, fill=self.C_TEXT_LIGHT, anchor="e")
 
         # Bars
@@ -311,7 +583,7 @@ class ReportDashboard(tk.Tk):
         cv.create_text(cx0 + 30, 49 + y, text="Report",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
         cv.create_text(cx0 + 115, 49 + y,
-                       text="06/05/2025",
+                       text=self.report_data["today"],
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # ── DATE RANGE + QUICK TABS ──
@@ -321,14 +593,14 @@ class ReportDashboard(tk.Tk):
         cv.create_text(cx0 + 18, (dr_y1 + dr_y2) // 2,
                        text="Custom", font=self.F_TAB, fill=self.C_TEXT, anchor="w")
         cv.create_text(cx0 + 90, (dr_y1 + dr_y2) // 2,
-                       text="01/04/2025", font=self.F_DATE, fill=self.C_TEXT, anchor="w")
+                       text=self.report_data["range"]["start"], font=self.F_DATE, fill=self.C_TEXT, anchor="w")
         # calendar icon placeholder
         cv.create_text(cx0 + 185, (dr_y1 + dr_y2) // 2,
                        text="🗓", font=("Segoe UI Emoji", 14), anchor="w")
         cv.create_text(cx0 + 210, (dr_y1 + dr_y2) // 2,
                        text="→", font=self.F_DATE, fill=self.C_TEXT, anchor="w")
         cv.create_text(cx0 + 238, (dr_y1 + dr_y2) // 2,
-                       text="06/05/2025", font=self.F_DATE, fill=self.C_TEXT, anchor="w")
+                       text=self.report_data["range"]["end"], font=self.F_DATE, fill=self.C_TEXT, anchor="w")
         cv.create_text(cx0 + 343, (dr_y1 + dr_y2) // 2,
                        text="🗓", font=("Segoe UI Emoji", 14), anchor="w")
 
@@ -365,26 +637,24 @@ class ReportDashboard(tk.Tk):
                 
             cv.create_text((tx1 + tx2) // 2, (ty1 + ty2) // 2,
                            text=tab, font=self.F_TAB, fill=self.C_TEXT, tags=tag)
+            cv.tag_bind(tag, "<Button-1>", lambda e, t=tab: self._switch_report_tab(t))
+            cv.tag_bind(tag, "<Enter>", lambda e: cv.config(cursor="hand2"))
+            cv.tag_bind(tag, "<Leave>", lambda e: cv.config(cursor=""))
             tab_y_start += tab_h + tab_gap
 
         # ── BAR CHART: Revenue Trend ──
-        bar_data = [("Mon", 60), ("Tue", 45), ("Wed", 78),
-                    ("Thu", 30), ("Fri", 20), ("Sat", 10), ("Sun", 50)]
+        bar_data = self.report_data["bar_data"]
         bar_y1 = 328 + y
         bar_y2 = bar_y1 + 240
         self._draw_bar_chart(cv, cx0, bar_y1, cx1, bar_y2,
-                             "Revenue Trend – This Week", bar_data)
+                             self.report_data["bar_title"], bar_data)
 
         # ── STAT CARDS ──
         sc_y1 = bar_y2 + 18
         sc_y2 = sc_y1 + 130
         sc_w  = (cw - 20) // 3
 
-        stats = [
-            ("Total Revenue", "4.2M", "+8% vs prior period"),
-            ("Transactions",  "12",   "avg 350k / order"),
-            ("Room Occupancy","72%",  ""),
-        ]
+        stats = self.report_data["stats"]
         for i, (lbl, val, sub) in enumerate(stats):
             sx1 = cx0 + i * (sc_w + 10)
             sx2 = sx1 + sc_w
@@ -408,10 +678,7 @@ class ReportDashboard(tk.Tk):
         d1cx = d1x1 + donut_w // 2 - 20
         d1cy = (donut_y1 + donut_y2) // 2 + 10
         self._draw_donut(cv, d1cx, d1cy, 68, 38,
-                         [(61, self.C_BAR,       "Room Stay\n61%"),
-                          (21, self.C_PINK,      "Grooming\n21%"),
-                          (11, self.C_TEAL,      "Transport\n11%"),
-                          (7,  self.C_ORANGE_PIE,"")],
+                         self.report_data["service_segments"],
                          "Revenue by Service",
                          d1x1, donut_y1, d1x2, donut_y2)
 
@@ -420,8 +687,7 @@ class ReportDashboard(tk.Tk):
         d2cx = d2x1 + (d2x2 - d2x1) // 2 - 10
         d2cy = (donut_y1 + donut_y2) // 2 + 10
         self._draw_donut(cv, d2cx, d2cy, 68, 38,
-                         [(74, self.C_BAR,      "VIP\n74,4%"),
-                          (26, self.C_GREY_PIE, "Non - VIP\n25,6%")],
+                         self.report_data["membership_segments"],
                          "Revenue by Memberships",
                          d2x1, donut_y1, d2x2, donut_y2)
 
@@ -434,7 +700,8 @@ class ReportDashboard(tk.Tk):
                        font=self.F_SECTION, fill=self.C_TEXT)
 
         # Legend
-        legend_items = [("Cash", self.C_PINK), ("Bank Transfer", self.C_TEAL), ("Card", self.C_ORANGE_PIE)]
+        payment_methods = self.report_data["payment_methods"]
+        legend_items = [(label, color) for label, _pct, color in payment_methods]
         lx = pmcx - 160
         for lbl, col in legend_items:
             cv.create_oval(lx - 6, pm_y1 + 40, lx + 6, pm_y1 + 52, fill=col, outline="")
@@ -449,10 +716,10 @@ class ReportDashboard(tk.Tk):
         bbar_y2 = bbar_y1 + 30
         bar_r   = (bbar_y2 - bbar_y1) // 2
         total_w = bar_x2 - bar_x1
-        segments = [(0.42, self.C_PINK), (0.45, self.C_TEAL), (0.13, self.C_ORANGE_PIE)]
+        segments = [(pct, color) for _label, pct, color in payment_methods]
         cur_x = bar_x1
         for i, (pct, col) in enumerate(segments):
-            seg_w = int(pct * total_w)
+            seg_w = int(pct * total_w) if i < len(segments) - 1 else bar_x2 - cur_x
             if i == 0:
                 cv.create_arc(cur_x, bbar_y1, cur_x + bar_r * 2, bbar_y2,
                               start=90, extent=180, fill=col, outline=col)
@@ -491,11 +758,12 @@ class ReportDashboard(tk.Tk):
         cv.create_line(cx0 + 15, hdr_y + 18, cx1 - 15, hdr_y + 18,
                        fill=self.C_DIVIDER, width=1)
 
-        disc_data = [
-            ("#1042", "Nguyễn Lan", "875.000đ", "-87.500đ", "VIP",     "787.500đ", "#F9D0D8", "#C05070"),
-            ("#1042", "Nguyễn Lan", "875.000đ", "-87.500đ", "Premium", "787.500đ", "#D4EDBA", "#5A8A1A"),
-        ]
+        disc_data = self.report_data["discounts"]
         row_h = 36
+        if not disc_data:
+            cv.create_text((cx0 + cx1) // 2, hdr_y + 48,
+                           text="No discounts in this period",
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT_LIGHT)
         for ri, row in enumerate(disc_data):
             ry  = hdr_y + 22 + ri * row_h
             rcy = ry + row_h // 2
@@ -522,9 +790,21 @@ class ReportDashboard(tk.Tk):
                        text="Total value given away this period",
                        font=self.F_CARD_SUB, fill=self.C_TEXT, anchor="e")
         cv.create_text(cx1 - 15, tot_y,
-                       text="-527.500đ",
+                       text=f"-{self.backend._money(sum(row[8] for row in disc_data))}",
                        font=("Baghdad", max(10, int(16 * self._s)), "bold"),
                        fill="#C83040", anchor="e")
+
+    def _switch_report_tab(self, tab_name):
+        self._active_tab = tab_name
+        self.report_data = self.backend.get_data(tab_name)
+        self.canvas.delete("all")
+        self.images = self.images[:1]
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(80 * self._s)))
 
 
 if __name__ == "__main__":
