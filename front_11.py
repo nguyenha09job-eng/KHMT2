@@ -3,6 +3,249 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
+
+
+class StaffBackend:
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _money(value):
+        if value is None:
+            value = 0
+        if isinstance(value, Decimal):
+            value = int(value)
+        return f"{int(value):,}đ"
+
+    @staticmethod
+    def _hours(value):
+        if value is None:
+            return 0.0
+        return float(value)
+
+    @staticmethod
+    def _role_label(role):
+        labels = {
+            "manager": "Manager",
+            "fulltime": "Fulltime",
+            "parttime": "Partime",
+        }
+        return labels.get(str(role or "").lower(), str(role or "-").title())
+
+    @staticmethod
+    def _time(value):
+        if not value:
+            return "-"
+        return value.strftime("%H:%M")
+
+    @staticmethod
+    def _emp_code(employee_id):
+        try:
+            return f"EMP{int(employee_id):03d}"
+        except (TypeError, ValueError):
+            return "EMP---"
+
+    def _active_where(self):
+        return "(is_active = 1 OR is_active = b'1')"
+
+    def get_employees(self, limit=5):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                e.employee_id,
+                e.full_name,
+                e.role,
+                e.phone,
+                e.base_salary_per_hour,
+                COALESCE(SUM(CASE
+                    WHEN YEAR(a.work_date) = YEAR(CURDATE())
+                     AND MONTH(a.work_date) = MONTH(CURDATE())
+                    THEN a.penalty ELSE 0 END), 0) AS month_penalty
+            FROM employees e
+            LEFT JOIN attendance a ON a.employee_id = e.employee_id
+            WHERE {self._active_where()}
+            GROUP BY e.employee_id, e.full_name, e.role, e.phone, e.base_salary_per_hour
+            ORDER BY
+                CASE LOWER(e.role)
+                    WHEN 'manager' THEN 0
+                    WHEN 'fulltime' THEN 1
+                    WHEN 'parttime' THEN 2
+                    ELSE 3
+                END,
+                e.employee_id
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        staff = []
+        for row in rows or []:
+            penalty = int(row.get("month_penalty") or 0)
+            role = row.get("role")
+            chip = "+ Penalty" if penalty > 0 else self._role_label(role)
+            staff.append({
+                "name": row.get("full_name") or "-",
+                "emp": self._emp_code(row.get("employee_id")),
+                "phone": row.get("phone") or "-",
+                "role": role,
+                "chip": chip,
+                "has_penalty": penalty > 0,
+            })
+        return staff
+
+    def get_summary(self):
+        row = self.db.fetch_one(
+            f"""
+            SELECT
+                COUNT(*) AS total_employees,
+                SUM(CASE WHEN LOWER(role) = 'manager' THEN 1 ELSE 0 END) AS managers,
+                SUM(CASE WHEN LOWER(role) = 'parttime' THEN 1 ELSE 0 END) AS parttime,
+                SUM(CASE WHEN LOWER(role) = 'fulltime' THEN 1 ELSE 0 END) AS fulltime
+            FROM employees
+            WHERE {self._active_where()}
+            """
+        ) or {}
+        present = self.db.fetch_one(
+            """
+            SELECT COUNT(DISTINCT employee_id) AS present_today
+            FROM attendance
+            WHERE work_date = CURDATE()
+            """
+        ) or {}
+        month = self.db.fetch_one(
+            f"""
+            SELECT
+                COALESCE(SUM(a.working_hours), 0) AS working_hours,
+                COALESCE(SUM((a.working_hours + COALESCE(a.overtime_hours, 0))
+                    * e.base_salary_per_hour - COALESCE(a.penalty, 0)), 0) AS salary_total
+            FROM attendance a
+            JOIN employees e ON e.employee_id = a.employee_id
+            WHERE YEAR(a.work_date) = YEAR(CURDATE())
+              AND MONTH(a.work_date) = MONTH(CURDATE())
+              AND {self._active_where().replace('is_active', 'e.is_active')}
+            """
+        ) or {}
+
+        total = int(row.get("total_employees") or 0)
+        managers = int(row.get("managers") or 0)
+        parttime = int(row.get("parttime") or 0)
+        fulltime = int(row.get("fulltime") or 0)
+        expected_today = max(total - managers, 0) or total
+        salary_total = int(month.get("salary_total") or 0)
+        salary_million = salary_total / 1_000_000
+        salary_big = f"{salary_million:.1f}".rstrip("0").rstrip(".")
+
+        return {
+            "total": total,
+            "role_sub": f"{parttime} partime - {fulltime} fulltime - {managers} manager",
+            "present_today": int(present.get("present_today") or 0),
+            "expected_today": expected_today,
+            "salary_big": salary_big,
+            "working_hours": int(round(self._hours(month.get("working_hours")))),
+        }
+
+    def get_focus_attendance(self):
+        row = self.db.fetch_one(
+            f"""
+            SELECT
+                a.attendance_id,
+                a.employee_id,
+                e.full_name,
+                e.role,
+                e.base_salary_per_hour,
+                a.check_in,
+                a.check_out,
+                a.working_hours,
+                a.overtime_hours,
+                a.penalty,
+                a.note
+            FROM attendance a
+            JOIN employees e ON e.employee_id = a.employee_id
+            WHERE a.work_date = CURDATE()
+              AND {self._active_where().replace('is_active', 'e.is_active')}
+            ORDER BY
+                CASE LOWER(e.role) WHEN 'manager' THEN 1 ELSE 0 END,
+                a.attendance_id DESC
+            LIMIT 1
+            """
+        )
+        if not row:
+            return None
+
+        employee_id = row.get("employee_id")
+        salary = self.get_salary_breakdown(employee_id)
+        working = self._hours(row.get("working_hours"))
+        overtime = self._hours(row.get("overtime_hours"))
+        penalty = int(row.get("penalty") or 0)
+        return {
+            "name": row.get("full_name") or "-",
+            "emp": self._emp_code(employee_id),
+            "present": True,
+            "clock_in": self._time(row.get("check_in")),
+            "clock_out": self._time(row.get("check_out")),
+            "working_hour": f"{working:g} hours",
+            "overtime_hour": f"{overtime:g} hours",
+            "penalty": self._money(penalty),
+            "note": row.get("note") or "Good job",
+            "salary": salary,
+        }
+
+    def get_salary_breakdown(self, employee_id):
+        periods = {
+            "Day": "a.work_date = CURDATE()",
+            "Week": "YEARWEEK(a.work_date, 1) = YEARWEEK(CURDATE(), 1)",
+            "Month": "YEAR(a.work_date) = YEAR(CURDATE()) AND MONTH(a.work_date) = MONTH(CURDATE())",
+        }
+        result = {}
+        for label, where_clause in periods.items():
+            row = self.db.fetch_one(
+                f"""
+                SELECT COALESCE(SUM((a.working_hours + COALESCE(a.overtime_hours, 0))
+                    * e.base_salary_per_hour - COALESCE(a.penalty, 0)), 0) AS salary
+                FROM attendance a
+                JOIN employees e ON e.employee_id = a.employee_id
+                WHERE a.employee_id = %s AND {where_clause}
+                """,
+                (employee_id,),
+            ) or {}
+            result[label] = self._money(row.get("salary"))
+        return result
+
+    def get_data(self):
+        try:
+            employees = self.get_employees()
+            return {
+                "summary": self.get_summary(),
+                "staff_list": employees,
+                "focus_attendance": self.get_focus_attendance(),
+                "month_label": datetime.now().strftime("%m/%Y"),
+                "manager_name": next(
+                    (item["name"] for item in employees
+                     if str(item.get("role") or "").lower() == "manager"),
+                    employees[0]["name"] if employees else "Staff",
+                ),
+            }
+        except Exception as exc:
+            print(f"Staff backend error: {exc}")
+            return self.fallback_data()
+
+    def fallback_data(self):
+        return {
+            "summary": {
+                "total": 0,
+                "role_sub": "0 partime - 0 fulltime - 0 manager",
+                "present_today": 0,
+                "expected_today": 0,
+                "salary_big": "0",
+                "working_hours": 0,
+            },
+            "staff_list": [],
+            "focus_attendance": None,
+            "month_label": datetime.now().strftime("%m/%Y"),
+            "manager_name": "Staff",
+        }
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -83,6 +326,8 @@ class StaffPage(tk.Tk):
         self.F_NEW_BTN      = ("Arial Rounded MT Bold", max(12, int(18 * s)), "bold")
 
         self.images = []
+        self.backend = StaffBackend()
+        self.staff_data = self.backend.get_data()
 
         # ── Layout ──────────────────────────────────────────
         main = tk.Frame(self, bg=self.C_BG)
@@ -269,7 +514,7 @@ class StaffPage(tk.Tk):
         # ══════════════════════════════════════════════════
         title_y = hbar_y2 + 42
         cv.create_text(hbar_x1, title_y,
-                       text="Thu Lan", font=self.F_TITLE_BIG, fill=self.C_TEXT, anchor="w")
+                       text=self.staff_data["manager_name"], font=self.F_TITLE_BIG, fill=self.C_TEXT, anchor="w")
 
         # ══════════════════════════════════════════════════
         # 3.  DROPDOWN "05/2026"
@@ -281,7 +526,7 @@ class StaffPage(tk.Tk):
         _round_rect(cv, dd_x1, dd_y1, dd_x2, dd_y2, radius=20, fill=self.C_WHITE, outline="")
 
         cv.create_text(dd_x1 + 16, (dd_y1 + dd_y2) // 2,
-                       text="05/2026", font=self.F_DROPDOWN, fill=self.C_TEXT, anchor="w")
+                       text=self.staff_data["month_label"], font=self.F_DROPDOWN, fill=self.C_TEXT, anchor="w")
         # Arrow triangle
         ax = dd_x2 - 18
         ay = (dd_y1 + dd_y2) // 2
@@ -301,9 +546,9 @@ class StaffPage(tk.Tk):
         cv.create_text(card_cx, row1_y1 + 28,
                        text="Total Employees", font=self.F_CARD_LABEL, fill=self.C_TEXT)
         cv.create_text(card_cx, row1_y1 + 75,
-                       text="4", font=self.F_CARD_NUM, fill=self.C_TEXT)
+                       text=str(self.staff_data["summary"]["total"]), font=self.F_CARD_NUM, fill=self.C_TEXT)
         cv.create_text(card_cx, row1_y2 - 22,
-                       text="3 partime - 1 manager", font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
+                       text=self.staff_data["summary"]["role_sub"], font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
 
         # --- Cat (manage.jpg) rounded image ---
         _dir = os.path.dirname(__file__)
@@ -329,20 +574,20 @@ class StaffPage(tk.Tk):
         stats = [
             {
                 "label":  "Present Today",
-                "big":    "2",
-                "sub":    "expected 3",
+                "big":    str(self.staff_data["summary"]["present_today"]),
+                "sub":    f"expected {self.staff_data['summary']['expected_today']}",
                 "font":   self.F_CARD_NUM,
             },
             {
                 "label":  "Estimated Salary This Month",
-                "big":    "12.7",
+                "big":    self.staff_data["summary"]["salary_big"],
                 "sub":    "millions",
                 "font":   self.F_CARD_NUM_MED,
             },
             {
                 "label":  "Total Working Hours",
-                "big":    "148",
-                "sub":    "May (up to now)",
+                "big":    str(self.staff_data["summary"]["working_hours"]),
+                "sub":    f"{datetime.now().strftime('%b')} (up to now)",
                 "font":   self.F_CARD_NUM,
             },
         ]
@@ -378,17 +623,8 @@ class StaffPage(tk.Tk):
         # ── LEFT: Staff list card ──
         _round_rect(cv, left_x1, bot_y1, left_x2, bot_y2, radius=26, fill=self.C_CARD)
 
-        staff_list = [
-            {"name": "Thu Lan",  "emp": "EMP001", "phone": "0901111222",
-             "chip": "Manager", "chip_bg": self.C_GREEN_BG, "chip_fg": self.C_GREEN_FG},
-            {"name": "Anh Tuấn", "emp": "EMP002", "phone": "0902222333",
-             "chip": "+ Penalty", "chip_bg": self.C_PINK_BG, "chip_fg": self.C_PINK_FG},
-            {"name": "Anh Tuấn", "emp": "EMP002", "phone": "0902222333",
-             "chip": "+ Penalty", "chip_bg": self.C_PINK_BG, "chip_fg": self.C_PINK_FG},
-            {"name": "Anh Tuấn", "emp": "EMP002", "phone": "0902222333",
-             "chip": "+ Penalty", "chip_bg": self.C_PINK_BG, "chip_fg": self.C_PINK_FG},
-            {"name": "Anh Tuấn", "emp": "EMP002", "phone": "0902222333",
-             "chip": "+ Penalty", "chip_bg": self.C_PINK_BG, "chip_fg": self.C_PINK_FG},
+        staff_list = self.staff_data["staff_list"] or [
+            {"name": "No active staff", "emp": "", "phone": "-", "chip": "-", "has_penalty": False}
         ]
 
         row_h_s = (bot_h - 46) // len(staff_list)
@@ -416,8 +652,10 @@ class StaffPage(tk.Tk):
                            font=self.F_STAFF_INFO, fill=self.C_TEXT_LIGHT, anchor="w")
 
             # Chip
+            chip_bg = self.C_PINK_BG if st.get("has_penalty") else self.C_GREEN_BG
+            chip_fg = self.C_PINK_FG if st.get("has_penalty") else self.C_GREEN_FG
             self._draw_chip(cv, chip_x_right, cy,
-                            st["chip"], st["chip_bg"], st["chip_fg"], self.F_CHIP_SMALL)
+                            st["chip"], chip_bg, chip_fg, self.F_CHIP_SMALL)
 
             # Divider (not after last)
             if ri < len(staff_list) - 1:
@@ -426,14 +664,29 @@ class StaffPage(tk.Tk):
 
         # ── RIGHT: Attendance Today card ──
         _round_rect(cv, right_x1, bot_y1, right_x2, bot_y2, radius=26, fill=self.C_CARD)
+        focus_att = self.staff_data["focus_attendance"] or {
+            "name": "No attendance",
+            "emp": "",
+            "present": False,
+            "clock_in": "-",
+            "clock_out": "-",
+            "working_hour": "0 hours",
+            "overtime_hour": "0 hours",
+            "penalty": "0đ",
+            "note": "No attendance today",
+            "salary": {"Day": "0đ", "Week": "0đ", "Month": "0đ"},
+        }
 
         # Card header row
         att_title_y = bot_y1 + 28
         cv.create_text(right_x1 + 22, att_title_y,
                        text="Attendance Today", font=self.F_ATT_TITLE, fill=self.C_TEXT, anchor="w")
         # "Yes" green chip
+        att_chip = "Yes" if focus_att["present"] else "No"
+        att_bg = self.C_GREEN_BG if focus_att["present"] else self.C_PINK_BG
+        att_fg = self.C_GREEN_FG if focus_att["present"] else self.C_PINK_FG
         self._draw_chip(cv, right_x2 - 38, att_title_y,
-                        "Yes", self.C_GREEN_BG, self.C_GREEN_FG, self.F_CHIP_SMALL)
+                        att_chip, att_bg, att_fg, self.F_CHIP_SMALL)
 
         # Divider
         cv.create_line(right_x1 + 15, att_title_y + 18,
@@ -443,16 +696,16 @@ class StaffPage(tk.Tk):
         # Employee name
         emp_name_y = att_title_y + 38
         cv.create_text(right_x1 + 22, emp_name_y,
-                       text="Anh Tuấn   EMP002",
+                       text=f"{focus_att['name']}   {focus_att['emp']}",
                        font=self.F_STAFF_NAME, fill=self.C_TEXT, anchor="w")
 
         # Attendance details table
         details = [
-            ("Clock - in",      "08:00"),
-            ("Clock - out",     "10:00"),
-            ("Working hour",    "2 hours"),
-            ("Overtime hour",   "0 hours"),
-            ("Penalty",         "0"),
+            ("Clock - in",      focus_att["clock_in"]),
+            ("Clock - out",     focus_att["clock_out"]),
+            ("Working hour",    focus_att["working_hour"]),
+            ("Overtime hour",   focus_att["overtime_hour"]),
+            ("Penalty",         focus_att["penalty"]),
         ]
         att_row_h = 26
         att_start_y = emp_name_y + 24
@@ -473,7 +726,7 @@ class StaffPage(tk.Tk):
         cv.create_text(right_x1 + 22, note_y,
                        text="Note", font=self.F_STAFF_NAME, fill=self.C_TEXT, anchor="w")
         cv.create_text(right_x1 + 22, note_y + 22,
-                       text="Good job", font=self.F_ATT_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
+                       text=focus_att["note"], font=self.F_ATT_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # Divider before Estimate salary
         sal_div_y = note_y + 48
@@ -518,7 +771,7 @@ class StaffPage(tk.Tk):
         # Salary amount
         sal_amt_y = sal_label_y + 32
         cv.create_text(right_x2 - 22, sal_amt_y,
-                       text="2,300,000đ", font=self.F_SALARY_NUM, fill=self.C_TEXT, anchor="e")
+                       text=focus_att["salary"]["Week"], font=self.F_SALARY_NUM, fill=self.C_TEXT, anchor="e")
 
 
 if __name__ == "__main__":
