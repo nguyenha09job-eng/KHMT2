@@ -1,8 +1,220 @@
 import tkinter as tk
+from tkinter import messagebox
 from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
 from datetime import datetime
+from decimal import Decimal
+
+from database import DatabaseConnection
+
+
+class EmployeeDashboardBackend:
+    def __init__(self, db=None, employee_id=None):
+        self.db = db or DatabaseConnection()
+        self.employee_id = employee_id
+
+    @staticmethod
+    def _money(value):
+        if value is None:
+            value = 0
+        if isinstance(value, Decimal):
+            value = int(value)
+        return f"{int(value):,}đ"
+
+    @staticmethod
+    def _emp_code(employee_id):
+        try:
+            return f"EMP{int(employee_id):03d}"
+        except (TypeError, ValueError):
+            return "EMP---"
+
+    @staticmethod
+    def _time(value):
+        return value.strftime("%H:%M") if value else "-"
+
+    @staticmethod
+    def _date(value):
+        return value.strftime("%d/%m/%Y") if value else "-"
+
+    @staticmethod
+    def _number(value):
+        if value is None:
+            return "0"
+        number = float(value)
+        return f"{number:g}"
+
+    def _active_where(self, alias=""):
+        prefix = f"{alias}." if alias else ""
+        return f"({prefix}is_active = 1 OR {prefix}is_active = b'1')"
+
+    def _selected_employee_id(self):
+        if self.employee_id:
+            return self.employee_id
+
+        row = self.db.fetch_one(
+            f"""
+            SELECT e.employee_id
+            FROM employees e
+            LEFT JOIN attendance a ON a.employee_id = e.employee_id
+            WHERE {self._active_where("e")}
+            ORDER BY
+                CASE LOWER(e.role) WHEN 'manager' THEN 1 ELSE 0 END,
+                CASE WHEN a.attendance_id IS NULL THEN 1 ELSE 0 END,
+                a.work_date DESC,
+                a.attendance_id DESC,
+                e.employee_id
+            LIMIT 1
+            """
+        )
+        return row["employee_id"] if row else None
+
+    def get_employee(self):
+        employee_id = self._selected_employee_id()
+        if not employee_id:
+            return None
+        return self.db.fetch_one(
+            """
+            SELECT employee_id, full_name, role, base_salary_per_hour
+            FROM employees
+            WHERE employee_id = %s
+            LIMIT 1
+            """,
+            (employee_id,),
+        )
+
+    def get_attendance_summary(self, employee_id):
+        row = self.db.fetch_one(
+            """
+            SELECT
+                COUNT(DISTINCT work_date) AS working_days,
+                COALESCE(SUM(working_hours), 0) AS total_hours
+            FROM attendance
+            WHERE employee_id = %s
+              AND YEAR(work_date) = YEAR(CURDATE())
+              AND MONTH(work_date) = MONTH(CURDATE())
+            """,
+            (employee_id,),
+        ) or {}
+        return {
+            "working_days": int(row.get("working_days") or 0),
+            "total_hours": self._number(row.get("total_hours")),
+        }
+
+    def get_attendance_history(self, employee_id, limit=6):
+        rows = self.db.fetch_all(
+            """
+            SELECT work_date, check_in, check_out, working_hours, overtime_hours, penalty
+            FROM attendance
+            WHERE employee_id = %s
+            ORDER BY work_date DESC, attendance_id DESC
+            LIMIT %s
+            """,
+            (employee_id, limit),
+        )
+        return [
+            (
+                self._date(row.get("work_date")),
+                self._time(row.get("check_in")),
+                self._time(row.get("check_out")),
+                self._number(row.get("working_hours")) if row.get("check_out") else "-",
+                self._number(row.get("overtime_hours")) if row.get("check_out") else "-",
+                self._money(row.get("penalty") or 0),
+            )
+            for row in rows or []
+        ]
+
+    def get_salary_values(self, employee_id):
+        periods = {
+            "Day": "a.work_date = CURDATE()",
+            "Week": "YEARWEEK(a.work_date, 1) = YEARWEEK(CURDATE(), 1)",
+            "Month": "YEAR(a.work_date) = YEAR(CURDATE()) AND MONTH(a.work_date) = MONTH(CURDATE())",
+        }
+        values = {}
+        for label, where_clause in periods.items():
+            row = self.db.fetch_one(
+                f"""
+                SELECT COALESCE(SUM((COALESCE(a.working_hours, 0) + COALESCE(a.overtime_hours, 0))
+                    * e.base_salary_per_hour - COALESCE(a.penalty, 0)), 0) AS salary
+                FROM attendance a
+                JOIN employees e ON e.employee_id = a.employee_id
+                WHERE a.employee_id = %s AND {where_clause}
+                """,
+                (employee_id,),
+            ) or {}
+            values[label] = self._money(row.get("salary"))
+        return values
+
+    def get_data(self):
+        try:
+            employee = self.get_employee()
+            if not employee:
+                return self.fallback_data()
+
+            employee_id = employee["employee_id"]
+            return {
+                "employee_id": employee_id,
+                "name": employee.get("full_name") or "-",
+                "emp": self._emp_code(employee_id),
+                "month_label": datetime.now().strftime("%m/%Y"),
+                "summary": self.get_attendance_summary(employee_id),
+                "attendance": self.get_attendance_history(employee_id),
+                "salary": self.get_salary_values(employee_id),
+            }
+        except Exception as exc:
+            print(f"Employee dashboard backend error: {exc}")
+            return self.fallback_data()
+
+    def fallback_data(self):
+        return {
+            "employee_id": None,
+            "name": "No active staff",
+            "emp": "EMP---",
+            "month_label": datetime.now().strftime("%m/%Y"),
+            "summary": {"working_days": 0, "total_hours": "0"},
+            "attendance": [],
+            "salary": {"Day": "0đ", "Week": "0đ", "Month": "0đ"},
+        }
+
+    def clock_in_or_out(self, employee_id):
+        if not employee_id:
+            raise ValueError("No employee selected")
+
+        open_shift = self.db.fetch_one(
+            """
+            SELECT attendance_id
+            FROM attendance
+            WHERE employee_id = %s
+              AND work_date = CURDATE()
+              AND check_out IS NULL
+            ORDER BY attendance_id DESC
+            LIMIT 1
+            """,
+            (employee_id,),
+        )
+        if open_shift:
+            self.db.execute(
+                """
+                UPDATE attendance
+                SET check_out = NOW(),
+                    working_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, NOW()) / 60, 2),
+                    overtime_hours = GREATEST(ROUND(TIMESTAMPDIFF(MINUTE, check_in, NOW()) / 60 - 8, 2), 0)
+                WHERE attendance_id = %s
+                """,
+                (open_shift["attendance_id"],),
+            )
+            return "Clock out saved"
+
+        attendance_id = self.db.execute(
+            """
+            INSERT INTO attendance (
+                employee_id, work_date, check_in, working_hours, overtime_hours, penalty, note
+            )
+            VALUES (%s, CURDATE(), NOW(), 0, 0, 0, 'Working')
+            """,
+            (employee_id,),
+        )
+        return f"Clock in saved #{attendance_id}"
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -66,7 +278,9 @@ class StaffDashboard(tk.Tk):
 
         # Salary tab state
         self._salary_tab = tk.StringVar(value="Week")
-        self._salary_values = {"Day": "328,570đ", "Week": "2,300,000đ", "Month": "9,200,000đ"}
+        self.backend = EmployeeDashboardBackend()
+        self.staff_data = self.backend.get_data()
+        self._salary_values = self.staff_data["salary"]
 
         self.images = []
 
@@ -217,12 +431,15 @@ class StaffDashboard(tk.Tk):
         cv.create_text((ci_x1 + ci_x2) // 2, (ci_y1 + ci_y2) // 2,
                        text="Clock in", font=self.F_CLOCKIN_BTN,
                        fill=self.C_WHITE, tags="clockin")
+        cv.tag_bind("clockin", "<Button-1>", self._clock_in_or_out)
+        cv.tag_bind("clockin", "<Enter>", lambda e: cv.config(cursor="hand2"))
+        cv.tag_bind("clockin", "<Leave>", lambda e: cv.config(cursor=""))
 
         # ── EMPLOYEE NAME + ID + MONTH SELECTOR ──
         name_y = 120 + y
-        cv.create_text(300 + dx, name_y + 12, text="Anh Tuấn",
+        cv.create_text(300 + dx, name_y + 12, text=self.staff_data["name"],
                        font=self.F_EMP_NAME, fill=self.C_TEXT, anchor="w")
-        cv.create_text(300 + dx, name_y + int(36 * s), text="EMP002",
+        cv.create_text(300 + dx, name_y + int(36 * s), text=self.staff_data["emp"],
                        font=self.F_EMP_ID, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # Month selector pill
@@ -231,7 +448,7 @@ class StaffDashboard(tk.Tk):
         ms_r = (ms_y2 - ms_y1) // 2
         _round_rect(cv, ms_x1, ms_y1, ms_x2, ms_y2, radius=ms_r, fill=self.C_WHITE)
         cv.create_text(ms_x1 + 20, (ms_y1 + ms_y2) // 2,
-                       text="05/2026", font=self.F_MONTH_SEL,
+                       text=self.staff_data["month_label"], font=self.F_MONTH_SEL,
                        fill=self.C_TEXT, anchor="w")
         # Dropdown arrow
         arr_x = ms_x2 - 22
@@ -250,14 +467,16 @@ class StaffDashboard(tk.Tk):
         cv.create_text(380 + dx, card_y1 + 22,
                        text="Working Days", font=self.F_STAT_LABEL, fill=self.C_TEXT)
         cv.create_text(380 + dx, card_y1 + 73,
-                       text="4", font=self.F_STAT_VAL, fill=self.C_TEXT)
+                       text=str(self.staff_data["summary"]["working_days"]),
+                       font=self.F_STAT_VAL, fill=self.C_TEXT)
 
         # Total Hours card
         _round_rect(cv, 475 + dx, card_y1, 665 + dx, card_y2, radius=20, fill=self.C_WHITE)
         cv.create_text(570 + dx, card_y1 + 22,
                        text="Total Hours", font=self.F_STAT_LABEL, fill=self.C_TEXT)
         cv.create_text(570 + dx, card_y1 + 73,
-                       text="40", font=self.F_STAT_VAL, fill=self.C_TEXT)
+                       text=str(self.staff_data["summary"]["total_hours"]),
+                       font=self.F_STAT_VAL, fill=self.C_TEXT)
 
         # Staff photo
         _dir = os.path.dirname(__file__)
@@ -291,11 +510,8 @@ class StaffDashboard(tk.Tk):
                        fill=self.C_DIVIDER, width=1)
 
         # Table rows
-        attendance_data = [
-            ("06/05/2025", "08:02", "–",     "–", "–", "–"),
-            ("05/05/2025", "08:02", "10:00", "2", "0", "0"),
-            ("05/05/2025", "08:02", "10:00", "2", "0", "0"),
-            ("05/05/2025", "08:02", "10:00", "2", "0", "0"),
+        attendance_data = self.staff_data["attendance"] or [
+            ("-", "-", "-", "-", "-", "-"),
         ]
 
         row_h = 46
@@ -363,6 +579,25 @@ class StaffDashboard(tk.Tk):
         self._sal_tab_r   = tab_r
         self._sal_tab_w   = tab_w
         self._sal_base_x  = 320 + dx
+
+    def _refresh_content(self):
+        self.staff_data = self.backend.get_data()
+        self._salary_values = self.staff_data["salary"]
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+    def _clock_in_or_out(self, event=None):
+        try:
+            message = self.backend.clock_in_or_out(self.staff_data.get("employee_id"))
+            messagebox.showinfo("Attendance saved", message, parent=self)
+            self._refresh_content()
+        except Exception as exc:
+            messagebox.showerror("Attendance failed", str(exc), parent=self)
 
     # ─────────────────────────── SALARY TAB SWITCH ─────────────────
     def _switch_salary_tab(self, tab_name):
