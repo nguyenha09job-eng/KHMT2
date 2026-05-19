@@ -2,7 +2,214 @@ import tkinter as tk
 from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
-from datetime import datetime
+from datetime import date
+from decimal import Decimal
+
+from database import DatabaseConnection
+
+
+class BillingBackend:
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _money(value):
+        if value is None:
+            value = 0
+        if isinstance(value, Decimal):
+            value = int(value)
+        return f"{int(value):,}đ"
+
+    @staticmethod
+    def _short_date(value):
+        if not value:
+            return "-"
+        return value.strftime("%d/%m")
+
+    @staticmethod
+    def _full_date(value):
+        if not value:
+            return "-"
+        return value.strftime("%d/%m/%Y")
+
+    @staticmethod
+    def _title(value, default="-"):
+        if value in (None, ""):
+            return default
+        return str(value).replace("_", " ").title()
+
+    def _services_for_booking(self, booking_id):
+        rows = self.db.fetch_all(
+            """
+            SELECT
+                sc.service_type,
+                s.quantity,
+                s.total_price
+            FROM services s
+            JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
+            WHERE s.booking_id = %s
+            ORDER BY sc.service_type
+            """,
+            (booking_id,),
+        )
+        return rows or []
+
+    def _booking_query(self, where_clause, order_clause, params=None):
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                b.booking_id,
+                c.full_name,
+                c.phone,
+                c.district,
+                p.pet_name,
+                p.species,
+                r.room_id,
+                rt.type_name,
+                b.check_in,
+                b.check_out,
+                b.room_price,
+                bs.status_name,
+                bl.payment_id,
+                bl.total_amount,
+                bl.discount_amount,
+                bl.payment_date,
+                bl.payment_method_id,
+                pm.method_name
+            FROM bookings b
+            JOIN customers c ON c.customer_id = b.customer_id
+            JOIN pets p ON p.pet_id = b.pet_id
+            JOIN rooms r ON r.room_id = b.room_id
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
+            {where_clause}
+            {order_clause}
+            LIMIT 1
+            """,
+            params or (),
+        )
+        return rows[0] if rows else None
+
+    def _format_booking(self, row, source_label):
+        services = self._services_for_booking(row["booking_id"])
+        check_in = row.get("check_in")
+        check_out = row.get("check_out")
+        nights = 1
+        if check_in and check_out:
+            nights = max(1, (check_out.date() - check_in.date()).days)
+
+        room_total = int(row.get("room_price") or 0) * nights
+        service_total = sum(int(s.get("total_price") or 0) for s in services)
+        discount = int(row.get("discount_amount") or 0)
+        computed_total = max(room_total + service_total - discount, 0)
+        total = int(row.get("total_amount") or computed_total)
+        method = self._title(row.get("method_name"), "Card")
+        paid = row.get("payment_id") is not None and row.get("payment_method_id") is not None
+
+        service_labels = []
+        for item in services[:4]:
+            service_labels.append({
+                "label": f"{self._title(item.get('service_type'))} x{item.get('quantity') or 1}",
+                "amount": int(item.get("total_price") or 0),
+            })
+
+        return {
+            "booking_id": row["booking_id"],
+            "customer": row.get("full_name") or "-",
+            "phone": row.get("phone") or "-",
+            "district": row.get("district") or "-",
+            "pet": row.get("pet_name") or "-",
+            "species": self._title(row.get("species"), "Pet"),
+            "room": f"Room {row.get('room_id')} - {row.get('type_name') or '-'}",
+            "type_name": row.get("type_name") or "-",
+            "check_in": self._short_date(check_in),
+            "check_out": self._short_date(check_out),
+            "checkout_date": self._full_date(check_out),
+            "payment_date": self._full_date(row.get("payment_date") or check_out),
+            "nights": nights,
+            "room_total": room_total,
+            "services": service_labels,
+            "service_total": service_total,
+            "discount": discount,
+            "total": total,
+            "points": int(total // 1000),
+            "method": method,
+            "method_key": str(row.get("method_name") or "card").lower(),
+            "status": "Paid" if paid else "Unpaid",
+            "source_label": source_label,
+        }
+
+    def get_focus_booking(self):
+        candidates = [
+            (
+                "WHERE DATE(b.check_out) = CURDATE() "
+                "AND bs.status_name IN ('booked', 'checked_in') "
+                "AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)",
+                "ORDER BY b.check_out, b.booking_id",
+                (),
+                "Due today",
+            ),
+            (
+                "WHERE bs.status_name IN ('booked', 'checked_in') "
+                "AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)",
+                "ORDER BY b.check_out, b.booking_id",
+                (),
+                "Next unpaid",
+            ),
+            (
+                "WHERE bl.payment_id IS NOT NULL",
+                "ORDER BY b.check_out DESC, bl.payment_date DESC, b.booking_id DESC",
+                (),
+                "Latest paid",
+            ),
+        ]
+        for where_clause, order_clause, params, label in candidates:
+            row = self._booking_query(where_clause, order_clause, params)
+            if row:
+                return self._format_booking(row, label)
+        return None
+
+    def get_history(self, limit=4):
+        rows = self.db.fetch_all(
+            """
+            SELECT
+                b.booking_id,
+                c.full_name,
+                p.pet_name,
+                b.check_out,
+                bl.total_amount,
+                pm.method_name,
+                bl.payment_method_id
+            FROM billing bl
+            JOIN bookings b ON b.booking_id = bl.booking_id
+            JOIN customers c ON c.customer_id = b.customer_id
+            JOIN pets p ON p.pet_id = b.pet_id
+            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
+            ORDER BY COALESCE(bl.payment_date, b.check_out) DESC, b.booking_id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        history = []
+        for row in rows or []:
+            history.append({
+                "booking_id": row.get("booking_id"),
+                "customer_pet": f"{row.get('full_name') or '-'} - {row.get('pet_name') or '-'}",
+                "date": self._full_date(row.get("check_out")),
+                "amount": self._money(row.get("total_amount")),
+                "method": self._title(row.get("method_name"), "-"),
+                "status": "Paid" if row.get("payment_method_id") else "Unpaid",
+            })
+        return history
+
+    def get_data(self):
+        return {
+            "today": date.today().strftime("%A, %d/%m/%Y"),
+            "focus": self.get_focus_booking(),
+            "history": self.get_history(),
+        }
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     """Vẽ hình chữ nhật bo góc bằng pieslice để mượt mà."""
@@ -73,6 +280,14 @@ class BillingDashboard(tk.Tk):
         self.F_PRICE = ("Arial Rounded MT Bold", max(11, int(17 * s)), "bold")
 
         self.images = []
+        self.backend = BillingBackend()
+        try:
+            self.data = self.backend.get_data()
+        except Exception as exc:
+            self.data = {"today": date.today().strftime("%A, %d/%m/%Y"), "focus": None, "history": []}
+            self.data_error = str(exc)
+        else:
+            self.data_error = None
 
         # -- Layout --
         main = tk.Frame(self, bg=self.C_BG)
@@ -245,6 +460,25 @@ class BillingDashboard(tk.Tk):
         result.paste(img, (0, 0), mask=mask)
         return ImageTk.PhotoImage(result)
 
+    def _money(self, value):
+        return BillingBackend._money(value)
+
+    def _chip_width(self, text, min_width=75):
+        return max(min_width, len(str(text)) * 8 + 26)
+
+    def _draw_status_chip(self, cv, x2, cy, status):
+        fill = self.C_PAID_BG if status == "Paid" else self.C_UNPAID_BG
+        width = 90
+        _round_rect(cv, x2 - width, cy - 12, x2, cy + 13, radius=12, fill=fill)
+        cv.create_text(x2 - width / 2, cy, text=status, font=self.F_BOLD, fill=self.C_TEXT)
+
+    def _draw_payment_option(self, cv, x1, y1, x2, label, active=False):
+        if active:
+            _round_rect(cv, x1, y1, x2, y1 + 34, radius=15, fill=self.C_ACTIVE)
+        else:
+            _round_rect_outline(cv, x1, y1, x2, y1 + 34, radius=15, color="#A89F95", width=1)
+        cv.create_text((x1 + x2) / 2, y1 + 17, text=label, font=self.F_REGULAR, fill=self.C_TEXT)
+
     # =====================================================
     # MAIN BILLING PAGE RENDER
     # =====================================================
@@ -268,9 +502,11 @@ class BillingDashboard(tk.Tk):
         # -------------------------------------------------
         # 2. MAIN TITLE & DOG BANNER ROW
         # -------------------------------------------------
+        focus = self.data.get("focus")
+        history = self.data.get("history", [])
         title_y = 95 + y_off
         cv.create_text(L_PAD, title_y + 15, text="DUE TODAY\n(Check-outs)", font=self.F_TITLE_LARGE, fill=self.C_TEXT, anchor="nw")
-        cv.create_text(L_PAD, title_y + 90, text="Tuesday, 06/05/2025", font=self.F_DATE, fill=self.C_TEXT, anchor="nw")
+        cv.create_text(L_PAD, title_y + 90, text=self.data.get("today", ""), font=self.F_DATE, fill=self.C_TEXT, anchor="nw")
 
         # Dog Banner
         _dir = os.path.dirname(__file__)
@@ -299,74 +535,101 @@ class BillingDashboard(tk.Tk):
         card_y2 = 705 + y_off
         _round_rect(cv, L_PAD, card_y1, R_PAD, card_y2, radius=25, fill=self.C_WHITE, outline="")
 
-        # Title
-        cv.create_text(L_PAD + 25, card_y1 + 28, text="Booking #1041", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
-        
-        # Tag Milo
-        _round_rect(cv, L_PAD + 190, card_y1 + 16, L_PAD + 265, card_y1 + 41, radius=12, fill=self.C_UNPAID_BG)
-        cv.create_text(L_PAD + 227, card_y1 + 28, text="🐶 Milo", font=self.F_BOLD, fill=self.C_TEXT)
+        if not focus:
+            msg = "No billing data found"
+            if self.data_error:
+                msg = f"Database error: {self.data_error}"
+            cv.create_text((L_PAD + R_PAD) / 2, card_y1 + 180, text=msg,
+                           font=self.F_TITLE_MED, fill=self.C_TEXT_LIGHT)
+        else:
+            # Title
+            cv.create_text(L_PAD + 25, card_y1 + 28, text=f"Booking #{focus['booking_id']}",
+                           font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
-        # Tag Unpaid
-        _round_rect(cv, R_PAD - 110, card_y1 + 16, R_PAD - 25, card_y1 + 41, radius=12, fill=self.C_UNPAID_BG)
-        cv.create_text(R_PAD - 67, card_y1 + 28, text="Unpaid", font=self.F_BOLD, fill=self.C_TEXT)
+            pet_text = f"{focus['species']} {focus['pet']}"
+            pet_w = self._chip_width(pet_text, 95)
+            _round_rect(cv, L_PAD + 190, card_y1 + 16, L_PAD + 190 + pet_w, card_y1 + 41,
+                        radius=12, fill=self.C_UNPAID_BG)
+            cv.create_text(L_PAD + 190 + pet_w / 2, card_y1 + 28, text=pet_text,
+                           font=self.F_BOLD, fill=self.C_TEXT)
 
-        # Subtitle
-        cv.create_text(L_PAD + 25, card_y1 + 58, text="Trần Minh  -  room_id  -  03/05 ➔ 06/05", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
-        cv.create_line(L_PAD + 25, card_y1 + 78, R_PAD - 25, card_y1 + 78, fill=self.C_LINE)
+            self._draw_status_chip(cv, R_PAD - 25, card_y1 + 28, focus["status"])
+            cv.create_text(R_PAD - 125, card_y1 + 28, text=focus["source_label"],
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
 
-        # Items list
-        y_item = card_y1 + 105
-        cv.create_text(L_PAD + 25, y_item, text="Room ( type_name × 3 nights )", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-        cv.create_text(R_PAD - 25, y_item, text="900,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+            subtitle = (
+                f"{focus['customer']} - {focus['room']} - "
+                f"{focus['check_in']} -> {focus['check_out']}"
+            )
+            cv.create_text(L_PAD + 25, card_y1 + 58, text=subtitle,
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
+            cv.create_line(L_PAD + 25, card_y1 + 78, R_PAD - 25, card_y1 + 78, fill=self.C_LINE)
 
-        y_item += 35
-        # Service Tags under room
-        _round_rect(cv, L_PAD + 25, y_item - 12, L_PAD + 125, y_item + 12, radius=12, fill=self.C_TAG_GREEN)
-        cv.create_text(L_PAD + 75, y_item, text="Grooming x2", font=self.F_BOLD, fill=self.C_TEXT)
+            y_item = card_y1 + 105
+            room_label = f"Room ({focus['type_name']} x {focus['nights']} nights)"
+            cv.create_text(L_PAD + 25, y_item, text=room_label,
+                           font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(R_PAD - 25, y_item, text=self._money(focus["room_total"]),
+                           font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
-        _round_rect(cv, L_PAD + 135, y_item - 12, L_PAD + 235, y_item + 12, radius=12, fill=self.C_TAG_PINK)
-        cv.create_text(L_PAD + 185, y_item, text="Daycare x2", font=self.F_BOLD, fill=self.C_TEXT)
-        cv.create_text(R_PAD - 25, y_item, text="550,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+            y_item += 35
+            if focus["services"]:
+                chip_x = L_PAD + 25
+                colors = [self.C_TAG_GREEN, self.C_TAG_PINK, self.C_PAID_BG, self.C_UNPAID_BG]
+                for idx, service in enumerate(focus["services"]):
+                    chip_w = self._chip_width(service["label"], 100)
+                    _round_rect(cv, chip_x, y_item - 12, chip_x + chip_w, y_item + 12,
+                                radius=12, fill=colors[idx % len(colors)])
+                    cv.create_text(chip_x + chip_w / 2, y_item, text=service["label"],
+                                   font=self.F_BOLD, fill=self.C_TEXT)
+                    chip_x += chip_w + 10
+                cv.create_text(R_PAD - 25, y_item, text=self._money(focus["service_total"]),
+                               font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+                y_item += 35
+            else:
+                cv.create_text(L_PAD + 25, y_item, text="No extra services",
+                               font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
+                cv.create_text(R_PAD - 25, y_item, text=self._money(0),
+                               font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+                y_item += 35
 
-        y_item += 35
-        cv.create_text(L_PAD + 25, y_item, text="Transport (District 7)", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-        cv.create_text(R_PAD - 25, y_item, text="200,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+            cv.create_text(L_PAD + 25, y_item, text=f"Customer phone ({focus['phone']})",
+                           font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(R_PAD - 25, y_item, text=focus["district"],
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
 
-        y_item += 35
-        cv.create_text(L_PAD + 25, y_item, text="VIP Discount (10%)", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-        cv.create_text(R_PAD - 25, y_item, text="-190,000đ", font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
+            y_item += 35
+            cv.create_text(L_PAD + 25, y_item, text="Discount",
+                           font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(R_PAD - 25, y_item, text=f"-{self._money(focus['discount'])}",
+                           font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
-        # Divider
-        y_line = y_item + 25
-        cv.create_line(L_PAD + 25, y_line, R_PAD - 25, y_line, fill=self.C_LINE)
+            y_line = y_item + 25
+            cv.create_line(L_PAD + 25, y_line, R_PAD - 25, y_line, fill=self.C_LINE)
 
-        # Total amount
-        y_total = y_line + 30
-        cv.create_text(L_PAD + 25, y_total, text="Total amount", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
-        cv.create_text(R_PAD - 25, y_total, text="2,300,000đ", font=("Arial Rounded MT Bold", max(15, int(21*self._s)), "bold"), fill=self.C_TEXT, anchor="e")
+            y_total = y_line + 30
+            cv.create_text(L_PAD + 25, y_total, text="Total amount",
+                           font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+            cv.create_text(R_PAD - 25, y_total, text=self._money(focus["total"]),
+                           font=("Arial Rounded MT Bold", max(15, int(21*self._s)), "bold"),
+                           fill=self.C_TEXT, anchor="e")
 
-        cv.create_text(R_PAD - 25, y_total + 25, text="Add 1,130 pts to account", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
+            cv.create_text(R_PAD - 25, y_total + 25,
+                           text=f"Add {focus['points']:,} pts to account",
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
 
-        # Payment options & Done
-        y_btn = y_total + 30
-        # Cash Outline
-        _round_rect_outline(cv, L_PAD + 25, y_btn, L_PAD + 115, y_btn + 34, radius=15, color="#A89F95", width=1)
-        cv.create_text(L_PAD + 70, y_btn + 17, text="Cash", font=self.F_REGULAR, fill=self.C_TEXT)
+            y_btn = y_total + 30
+            method_key = focus.get("method_key", "card")
+            self._draw_payment_option(cv, L_PAD + 25, y_btn, L_PAD + 115, "Cash", method_key == "cash")
+            self._draw_payment_option(cv, L_PAD + 130, y_btn, L_PAD + 280, "Bank Transfer", method_key == "transfer")
+            self._draw_payment_option(cv, L_PAD + 295, y_btn, L_PAD + 385, "Card", method_key == "card")
 
-        # Bank Transfer Outline
-        _round_rect_outline(cv, L_PAD + 130, y_btn, L_PAD + 280, y_btn + 34, radius=15, color="#A89F95", width=1)
-        cv.create_text(L_PAD + 205, y_btn + 17, text="Bank Transfer", font=self.F_REGULAR, fill=self.C_TEXT)
+            cv.create_text(L_PAD + 25, y_btn + 58, text=focus["payment_date"],
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
 
-        # Card Solid active
-        _round_rect(cv, L_PAD + 295, y_btn, L_PAD + 385, y_btn + 34, radius=15, fill=self.C_ACTIVE)
-        cv.create_text(L_PAD + 340, y_btn + 17, text="Card", font=self.F_REGULAR, fill=self.C_TEXT)
-
-        # Date at footer
-        cv.create_text(L_PAD + 25, y_btn + 58, text="06/05/2025", font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
-
-        # Nút Done
-        _round_rect(cv, R_PAD - 125, y_btn + 22, R_PAD - 25, y_btn + 62, radius=20, fill=self.C_BTN_GREEN)
-        cv.create_text(R_PAD - 75, y_btn + 42, text="Done", font=self.F_BOLD, fill=self.C_WHITE)
+            _round_rect(cv, R_PAD - 125, y_btn + 22, R_PAD - 25, y_btn + 62,
+                        radius=20, fill=self.C_BTN_GREEN)
+            cv.create_text(R_PAD - 75, y_btn + 42, text="Done", font=self.F_BOLD, fill=self.C_WHITE)
 
         # -------------------------------------------------
         # 5. BOOKING HISTORY
@@ -375,7 +638,8 @@ class BillingDashboard(tk.Tk):
         cv.create_text(L_PAD, hist_y, text="Booking History", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = hist_y + 20
-        tbl_y2 = tbl_y1 + 185
+        row_count = max(len(history), 1)
+        tbl_y2 = tbl_y1 + 70 + row_count * 45
         _round_rect(cv, L_PAD, tbl_y1, R_PAD, tbl_y2, radius=25, fill=self.C_WHITE, outline="")
 
         # Table Header
@@ -387,20 +651,22 @@ class BillingDashboard(tk.Tk):
         
         cv.create_line(L_PAD + 20, h_y + 15, R_PAD - 20, h_y + 15, fill=self.C_LINE)
 
-        # Rows
         row_y = h_y + 40
-        for i in range(2):
-            cv.create_text(cols_x[0], row_y, text="1042", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-            cv.create_text(cols_x[1], row_y, text="Nguyễn Lan · Milo", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-            cv.create_text(cols_x[2], row_y, text="04/05/2025", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-            cv.create_text(cols_x[3], row_y, text="1,130,000đ", font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
-            cv.create_text(cols_x[4], row_y, text="Transfer", font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-            
-            # Tag Paid
-            _round_rect(cv, cols_x[5]-10, row_y - 12, cols_x[5] + 80, row_y + 12, radius=12, fill=self.C_PAID_BG)
-            cv.create_text(cols_x[5] + 35, row_y, text="Paid", font=self.F_BOLD, fill=self.C_TEXT)
+        if not history:
+            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No paid billing history found",
+                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT)
+        for i, item in enumerate(history):
+            cv.create_text(cols_x[0], row_y, text=str(item["booking_id"]), font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[1], row_y, text=item["customer_pet"], font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[2], row_y, text=item["date"], font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[3], row_y, text=item["amount"], font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
+            cv.create_text(cols_x[4], row_y, text=item["method"], font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
 
-            if i == 0:
+            fill = self.C_PAID_BG if item["status"] == "Paid" else self.C_UNPAID_BG
+            _round_rect(cv, cols_x[5]-10, row_y - 12, cols_x[5] + 80, row_y + 12, radius=12, fill=fill)
+            cv.create_text(cols_x[5] + 35, row_y, text=item["status"], font=self.F_BOLD, fill=self.C_TEXT)
+
+            if i < len(history) - 1:
                 cv.create_line(L_PAD + 20, row_y + 20, R_PAD - 20, row_y + 20, fill=self.C_LINE)
             row_y += 45
 
