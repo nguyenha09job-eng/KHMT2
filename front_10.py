@@ -222,74 +222,93 @@ class BillingBackend:
                 params,
             )
 
-    def get_focus_booking(self):
-        candidates = [
-            (
-                "WHERE DATE(b.check_out) = CURDATE() "
-                "AND bs.status_name IN ('booked', 'checked_in') "
-                "AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)",
-                "ORDER BY b.check_out, b.booking_id",
-                (),
-                "Due today",
-            ),
-            (
-                "WHERE bs.status_name IN ('booked', 'checked_in') "
-                "AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)",
-                "ORDER BY b.check_out, b.booking_id",
-                (),
-                "Next unpaid",
-            ),
-            (
-                "WHERE bl.payment_id IS NOT NULL",
-                "ORDER BY b.check_out DESC, bl.payment_date DESC, b.booking_id DESC",
-                (),
-                "Latest paid",
-            ),
-        ]
-        for where_clause, order_clause, params, label in candidates:
-            row = self._booking_query(where_clause, order_clause, params)
-            if row:
-                return self._format_booking(row, label)
-        return None
-
-    def get_history(self, limit=4):
-        rows = self.db.fetch_all(
+    def get_unpaid_today(self, search_query="", limit=20):
+        search_query = str(search_query or "").strip()
+        search_clause = ""
+        params = []
+        if search_query:
+            search_clause = """
+                AND (
+                    c.full_name LIKE %s
+                    OR c.phone LIKE %s
+                    OR p.pet_name LIKE %s
+                    OR CAST(b.booking_id AS CHAR) LIKE %s
+                )
             """
+            term = f"%{search_query}%"
+            params.extend([term, term, term, term])
+        params.append(limit)
+
+        rows = self.db.fetch_all(
+            f"""
             SELECT
                 b.booking_id,
                 c.full_name,
+                c.phone,
+                c.district,
                 p.pet_name,
+                p.species,
+                r.room_id,
+                rt.type_name,
+                b.check_in,
                 b.check_out,
+                b.room_price,
+                bs.status_name,
+                bl.payment_id,
                 bl.total_amount,
-                pm.method_name,
-                bl.payment_method_id
-            FROM billing bl
-            JOIN bookings b ON b.booking_id = bl.booking_id
+                bl.discount_amount,
+                bl.payment_date,
+                bl.payment_method_id,
+                pm.method_name
+            FROM bookings b
             JOIN customers c ON c.customer_id = b.customer_id
             JOIN pets p ON p.pet_id = b.pet_id
+            JOIN rooms r ON r.room_id = b.room_id
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
             LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
-            ORDER BY COALESCE(bl.payment_date, b.check_out) DESC, b.booking_id DESC
+            WHERE DATE(b.check_out) = CURDATE()
+              AND bs.status_name IN ('booked', 'checked_in')
+              AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)
+              {search_clause}
+            ORDER BY b.check_out, b.booking_id
             LIMIT %s
             """,
-            (limit,),
+            tuple(params),
         )
+        return [self._format_booking(row, "Due today") for row in rows or []]
+
+    def get_history(self, limit=4, search_query=""):
+        rows = self.get_unpaid_today(search_query, limit)
         history = []
         for row in rows or []:
             history.append({
                 "booking_id": row.get("booking_id"),
-                "customer_pet": f"{row.get('full_name') or '-'} - {row.get('pet_name') or '-'}",
-                "date": self._full_date(row.get("check_out")),
-                "amount": self._money(row.get("total_amount")),
-                "method": self._title(row.get("method_name"), "-"),
-                "status": "Paid" if row.get("payment_method_id") else "Unpaid",
+                "customer_pet": f"{row.get('customer') or '-'} - {row.get('pet') or '-'}",
+                "date": row.get("checkout_date"),
+                "amount": self._money(row.get("total")),
+                "method": self.METHOD_NAMES.get(row.get("method_key"), "Card"),
+                "status": row.get("status", "Unpaid"),
             })
         return history
 
-    def get_data(self):
+    def get_data(self, search_query=""):
+        unpaid_today = self.get_unpaid_today(search_query)
         return {
             "today": date.today().strftime("%A, %d/%m/%Y"),
-            "focus": self.get_focus_booking(),
-            "history": self.get_history(),
+            "focus": unpaid_today[0] if unpaid_today else None,
+            "history": [
+                {
+                    "booking_id": row.get("booking_id"),
+                    "customer_pet": f"{row.get('customer') or '-'} - {row.get('pet') or '-'}",
+                    "date": row.get("checkout_date"),
+                    "amount": self._money(row.get("total")),
+                    "method": self.METHOD_NAMES.get(row.get("method_key"), "Card"),
+                    "status": row.get("status", "Unpaid"),
+                }
+                for row in unpaid_today
+            ],
         }
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -361,9 +380,12 @@ class BillingDashboard(tk.Tk):
         self.F_PRICE = ("Arial Rounded MT Bold", max(11, int(17 * s)), "bold")
 
         self.images = []
+        self.search_var = tk.StringVar()
+        self.search_entry = None
+        self.search_after_id = None
         self.backend = BillingBackend()
         try:
-            self.data = self.backend.get_data()
+            self.data = self.backend.get_data(self.search_var.get())
         except Exception as exc:
             self.data = {"today": date.today().strftime("%A, %d/%m/%Y"), "focus": None, "history": []}
             self.data_error = str(exc)
@@ -436,10 +458,34 @@ class BillingDashboard(tk.Tk):
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
 
     def _redraw_billing_page(self):
+        if self.search_entry is not None:
+            self.search_entry.destroy()
+            self.search_entry = None
         self.canvas.delete("all")
         self.draw_billing_page()
         self.canvas.scale("all", 0, 0, self._s, self._s)
         self._refresh_scrollregion()
+
+    def reload_billing_data(self):
+        try:
+            self.data = self.backend.get_data(self.search_var.get())
+            self.data_error = None
+        except Exception as exc:
+            self.data = {"today": date.today().strftime("%A, %d/%m/%Y"), "focus": None, "history": []}
+            self.data_error = str(exc)
+        focus = self.data.get("focus") or {}
+        self.selected_method = focus.get("method_key", self.selected_method)
+
+    def on_search_changed(self, _event=None):
+        if self.search_after_id:
+            self.after_cancel(self.search_after_id)
+        self.search_after_id = self.after(250, self.apply_search)
+
+    def apply_search(self):
+        self.search_after_id = None
+        self.status_message = ""
+        self.reload_billing_data()
+        self._redraw_billing_page()
 
     def select_payment_method(self, method_key):
         self.selected_method = self.backend._method_key(method_key)
@@ -452,7 +498,7 @@ class BillingDashboard(tk.Tk):
             return
         try:
             self.backend.mark_paid(focus, self.selected_method)
-            self.data = self.backend.get_data()
+            self.data = self.backend.get_data(self.search_var.get())
             focus = self.data.get("focus") or {}
             self.selected_method = focus.get("method_key", self.selected_method)
             self.status_message = "Payment saved successfully"
@@ -643,7 +689,30 @@ class BillingDashboard(tk.Tk):
         # -------------------------------------------------
         search_y = 240 + y_off
         _round_rect(cv, L_PAD, search_y, R_PAD, search_y + 45, radius=22, fill=self.C_WHITE, outline="")
-        cv.create_text(L_PAD + 20, search_y + 22, text="Search by name, phone number, or pet name", font=self.F_REGULAR, fill="#A5A5A5", anchor="w")
+        self.search_entry = tk.Entry(
+            cv,
+            textvariable=self.search_var,
+            font=self.F_REGULAR,
+            fg=self.C_TEXT,
+            bg=self.C_WHITE,
+            relief="flat",
+            highlightthickness=0,
+            insertbackground=self.C_TEXT,
+        )
+        self.search_entry.bind("<KeyRelease>", self.on_search_changed)
+        self.search_entry.bind("<Return>", lambda _e: self.apply_search())
+        cv.create_window(
+            L_PAD + 20,
+            search_y + 22,
+            window=self.search_entry,
+            width=int((R_PAD - L_PAD - 80) * self._s),
+            height=int(30 * self._s),
+            anchor="w",
+        )
+        if not self.search_var.get():
+            cv.create_text(L_PAD + 22, search_y + 22,
+                           text="Search by name, phone number, pet name, or booking ID",
+                           font=self.F_REGULAR, fill="#A5A5A5", anchor="w")
         
         # Simple search loop icon
         cv.create_oval(R_PAD - 40, search_y + 14, R_PAD - 26, search_y + 28, outline=self.C_TEXT, width=2)
@@ -764,10 +833,10 @@ class BillingDashboard(tk.Tk):
             cv.tag_bind("done_btn", "<Leave>", lambda _e: cv.config(cursor=""))
 
         # -------------------------------------------------
-        # 5. BOOKING HISTORY
+        # 5. UNPAID BILLING LIST
         # -------------------------------------------------
         hist_y = card_y2 + 40
-        cv.create_text(L_PAD, hist_y, text="Booking History", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        cv.create_text(L_PAD, hist_y, text="Unpaid Billings Today", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = hist_y + 20
         row_count = max(len(history), 1)
@@ -785,7 +854,7 @@ class BillingDashboard(tk.Tk):
 
         row_y = h_y + 40
         if not history:
-            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No paid billing history found",
+            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No unpaid billing found for today",
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT)
         for i, item in enumerate(history):
             cv.create_text(cols_x[0], row_y, text=str(item["booking_id"]), font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
