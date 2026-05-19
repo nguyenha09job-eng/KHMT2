@@ -43,7 +43,7 @@ class DashboardBackend:
             JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()
-              AND DATE(b.check_out) > CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
               AND LOWER(p.species) IN ('dog', 'cat')
             """
         )
@@ -55,7 +55,7 @@ class DashboardBackend:
             JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()
-              AND DATE(b.check_out) > CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
               AND LOWER(p.species) = 'dog'
             """
         )
@@ -67,7 +67,7 @@ class DashboardBackend:
             JOIN pets p ON p.pet_id = b.pet_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()
-              AND DATE(b.check_out) > CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
               AND LOWER(p.species) = 'cat'
             """
         )
@@ -98,8 +98,8 @@ class DashboardBackend:
             FROM bookings b
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             WHERE bs.status_name IN ('booked', 'checked_in')
-              AND b.check_in <= NOW()
-              AND b.check_out >= NOW()
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
             """
         )
 
@@ -117,8 +117,6 @@ class DashboardBackend:
     def get_monthly_revenue(self):
         today = date.today()
         first_this_month = today.replace(day=1)
-        last_prev_month = first_this_month - timedelta(days=1)
-        first_prev_month = last_prev_month.replace(day=1)
 
         this_month = self.db.fetch_one(
             """
@@ -132,6 +130,17 @@ class DashboardBackend:
                 (today + timedelta(days=1)).strftime("%Y-%m-%d"),
             ),
         )
+
+        # MTD vs same period last month
+        if today.month == 1:
+            first_prev_month = date(today.year - 1, 12, 1)
+            last_day_prev = 31
+        else:
+            first_prev_month = date(today.year, today.month - 1, 1)
+            last_day_prev = (first_this_month - timedelta(days=1)).day
+        day_capped = min(today.day, last_day_prev)
+        prev_end = first_prev_month.replace(day=day_capped) + timedelta(days=1)
+
         prev_month = self.db.fetch_one(
             """
             SELECT COALESCE(SUM(total_amount), 0) AS total
@@ -141,7 +150,7 @@ class DashboardBackend:
             """,
             (
                 first_prev_month.strftime("%Y-%m-%d"),
-                first_this_month.strftime("%Y-%m-%d"),
+                prev_end.strftime("%Y-%m-%d"),
             ),
         )
 
@@ -187,11 +196,18 @@ class DashboardBackend:
         t = total["cnt"] if total else 0
         p = pending["cnt"] if pending else 0
 
+        if t == 0:
+            subtext = "No check-outs today"
+        elif p > 0:
+            subtext = "Pending billing"
+        else:
+            subtext = "All billed"
+
         return {
             "total": t,
             "pending_billing": p,
             "display": format_large_number(t),
-            "subtext": "Pending billing" if p > 0 else "All billed",
+            "subtext": subtext,
         }
 
     def get_active_bookings(self):

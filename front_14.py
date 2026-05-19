@@ -180,7 +180,7 @@ class ReportDashboard(tk.Tk):
         cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
 
     # ─────────────────────────── IMAGE HELPER ───────────────────────
-    def create_rounded_image(self, image_path, width, height, radius):
+    def create_rounded_image(self, image_path, width, height, radius, crop_align="center"):
         s = self._s
         sw, sh, sr = int(width * s), int(height * s), int(radius * s)
         if not os.path.exists(image_path):
@@ -192,12 +192,26 @@ class ReportDashboard(tk.Tk):
         if img_ratio > target_ratio:
             nw = int(sh * img_ratio)
             img = img.resize((nw, sh), Image.Resampling.LANCZOS)
-            left = (nw - sw) // 2
+            if isinstance(crop_align, (float, int)):
+                left = int((nw - sw) * crop_align)
+            elif crop_align == "left":
+                left = 0
+            elif crop_align == "right":
+                left = nw - sw
+            else:
+                left = (nw - sw) // 2
             img = img.crop((left, 0, left + sw, sh))
         else:
             nh = int(sw / img_ratio)
             img = img.resize((sw, nh), Image.Resampling.LANCZOS)
-            top = (nh - sh) // 2
+            if isinstance(crop_align, (float, int)):
+                top = int((nh - sh) * crop_align)
+            elif crop_align == "bottom":
+                top = nh - sh
+            elif crop_align == "top":
+                top = 0
+            else:
+                top = (nh - sh) // 2
             img = img.crop((0, top, sw, top + sh))
         mask = Image.new("L", (sw, sh), 0)
         ImageDraw.Draw(mask).rounded_rectangle((0, 0, sw, sh), radius=sr, fill=255)
@@ -245,7 +259,7 @@ class ReportDashboard(tk.Tk):
             bh  = (val / max_val) * chart_h
             by1 = chart_y2 - bh
             by2 = chart_y2
-            br  = int(bar_w * 0.25)
+            br  = 8
             _round_rect(cv, bx1, by1, bx2, by2, radius=br, fill=self.C_BAR)
             # Value label above bar
             cv.create_text((bx1 + bx2) / 2, by1 - 8, text=str(val),
@@ -303,7 +317,7 @@ class ReportDashboard(tk.Tk):
         # ── DATE RANGE + QUICK TABS ──
         dr_y1, dr_y2 = 82 + y, 118 + y
         dr_r = (dr_y2 - dr_y1) // 2
-        _round_rect(cv, cx0, dr_y1, cx0 + 390, dr_y2, radius=dr_r, fill=self.C_WHITE)
+        _round_rect(cv, cx0, dr_y1, cx0 + 550, dr_y2, radius=dr_r, fill=self.C_WHITE)
         cv.create_text(cx0 + 18, (dr_y1 + dr_y2) // 2,
                        text="Custom", font=self.F_TAB, fill=self.C_TEXT, anchor="w")
         cv.create_text(cx0 + 90, (dr_y1 + dr_y2) // 2,
@@ -320,20 +334,20 @@ class ReportDashboard(tk.Tk):
 
         # ── CAT BANNER IMAGE ──
         img_path = os.path.join(_dir, "image", "report.jpg")
-        img_tk   = self.create_rounded_image(img_path, 550, 160, radius=18)
+        img_tk   = self.create_rounded_image(img_path, 550, 180, radius=18, crop_align=0.65)
         self.images.append(img_tk)
         cv.create_image(cx0, 130 + y, image=img_tk, anchor="nw")
 
         # ── QUICK FILTER CONTAINER CARD & TABS ──
         card_x1 = cx0 + 568
-        card_y1 = 130 + y
+        card_y1 = 82 + y
         card_x2 = cx1
-        card_y2 = card_y1 + 160
+        card_y2 = 130 + y + 180  # Ends at 310 + y, perfectly aligned with the cat banner's bottom
         _round_rect(cv, card_x1, card_y1, card_x2, card_y2, radius=26, fill=self.C_WHITE)
 
         tabs = ["Today", "This week", "This month", "Last month"]
-        tab_w, tab_h = 240, 28
-        tab_gap = 8
+        tab_w, tab_h = 240, 42
+        tab_gap = 12
         tab_y_start = card_y1 + 12
 
         for tab in tabs:
@@ -356,7 +370,7 @@ class ReportDashboard(tk.Tk):
         # ── BAR CHART: Revenue Trend ──
         bar_data = [("Mon", 60), ("Tue", 45), ("Wed", 78),
                     ("Thu", 30), ("Fri", 20), ("Sat", 10), ("Sun", 50)]
-        bar_y1 = 308 + y
+        bar_y1 = 328 + y
         bar_y2 = bar_y1 + 240
         self._draw_bar_chart(cv, cx0, bar_y1, cx1, bar_y2,
                              "Revenue Trend – This Week", bar_data)

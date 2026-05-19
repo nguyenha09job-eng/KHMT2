@@ -1,5 +1,67 @@
 import tkinter as tk
+from tkinter import messagebox
+
 from PIL import Image, ImageTk, ImageDraw
+
+from database import DatabaseConnection
+
+
+class NewStaffBackend:
+    DEFAULT_ROLE = "parttime"
+    DEFAULT_BASE_SALARY = 200000
+
+    def __init__(self, db=None):
+        self.db = db or DatabaseConnection()
+
+    @staticmethod
+    def _clean(value):
+        return (value or "").strip()
+
+    @staticmethod
+    def _is_placeholder(value, placeholder):
+        return (value or "").strip().lower() == placeholder.lower()
+
+    def add_staff(self, phone, full_name):
+        phone = self._clean(phone)
+        full_name = self._clean(full_name)
+
+        if self._is_placeholder(phone, "ex: 012345678"):
+            phone = ""
+        if self._is_placeholder(full_name, "ex: Thuy Hang"):
+            full_name = ""
+
+        if not phone or not full_name:
+            raise ValueError("Phone number and full name are required")
+        if not phone.isdigit() or not 9 <= len(phone) <= 15:
+            raise ValueError("Phone number must be 9-15 digits")
+
+        existing = self.db.fetch_one(
+            "SELECT employee_id FROM employees WHERE phone = %s LIMIT 1",
+            (phone,),
+        )
+        if existing:
+            employee_id = existing["employee_id"]
+            self.db.execute(
+                """
+                UPDATE employees
+                SET full_name = %s,
+                    role = COALESCE(NULLIF(role, ''), %s),
+                    base_salary_per_hour = COALESCE(base_salary_per_hour, %s),
+                    is_active = b'1'
+                WHERE employee_id = %s
+                """,
+                (full_name, self.DEFAULT_ROLE, self.DEFAULT_BASE_SALARY, employee_id),
+            )
+            return {"employee_id": employee_id, "updated": True}
+
+        employee_id = self.db.execute(
+            """
+            INSERT INTO employees (full_name, role, phone, base_salary_per_hour, is_active)
+            VALUES (%s, %s, %s, %s, b'1')
+            """,
+            (full_name, self.DEFAULT_ROLE, phone, self.DEFAULT_BASE_SALARY),
+        )
+        return {"employee_id": employee_id, "updated": False}
 
 
 # =========================
@@ -38,6 +100,7 @@ class NewStaffPopup(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        self.backend = NewStaffBackend()
 
         # ===== WINDOW (Thu nhỏ vừa vặn) =====
         WIDTH  = 540
@@ -183,8 +246,20 @@ class NewStaffPopup(tk.Tk):
 
     # =========================
     def add_staff(self, event=None):
-        print("Phone:", self.phone_entry.get())
-        print("Name:",  self.name_entry.get())
+        try:
+            result = self.backend.add_staff(
+                self.phone_entry.get(),
+                self.name_entry.get(),
+            )
+            action = "updated" if result["updated"] else "added"
+            messagebox.showinfo(
+                "Success",
+                f"Staff #{result['employee_id']} {action} successfully.",
+                parent=self,
+            )
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("Add staff failed", str(exc), parent=self)
 
 
 # =========================
