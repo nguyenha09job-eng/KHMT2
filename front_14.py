@@ -12,6 +12,8 @@ from database import DatabaseConnection
 class ReportBackend:
     def __init__(self, db=None):
         self.db = db or DatabaseConnection()
+        self.custom_start = None
+        self.custom_end = None
 
     @staticmethod
     def _money(value):
@@ -34,6 +36,20 @@ class ReportBackend:
         return f"{float(value or 0):.0f}%"
 
     def _period_condition(self):
+        if self.active_tab == "Custom":
+            start = self.custom_start
+            end = self.custom_end
+            if start and end:
+                try:
+                    from datetime import datetime
+                    datetime.strptime(start, "%Y-%m-%d")
+                    datetime.strptime(end, "%Y-%m-%d")
+                    return (
+                        f"DATE(COALESCE(bl.payment_date, b.check_out)) >= '{start}' "
+                        f"AND DATE(COALESCE(bl.payment_date, b.check_out)) <= '{end}'"
+                    )
+                except ValueError:
+                    pass
         filters = {
             "Today": "DATE(COALESCE(bl.payment_date, b.check_out)) = CURDATE()",
             "This week": "YEARWEEK(COALESCE(bl.payment_date, b.check_out), 1) = YEARWEEK(CURDATE(), 1)",
@@ -44,8 +60,10 @@ class ReportBackend:
         }
         return filters.get(self.active_tab, filters["This week"])
 
-    def get_data(self, active_tab="This week"):
+    def get_data(self, active_tab="This week", custom_start=None, custom_end=None):
         self.active_tab = active_tab
+        self.custom_start = custom_start
+        self.custom_end = custom_end
         try:
             return {
                 "today": datetime.now().strftime("%d/%m/%Y"),
@@ -63,6 +81,14 @@ class ReportBackend:
             return self.fallback_data(active_tab)
 
     def get_range_label(self):
+        if self.active_tab == "Custom" and self.custom_start and self.custom_end:
+            from datetime import datetime
+            try:
+                s = datetime.strptime(self.custom_start, "%Y-%m-%d").strftime("%d/%m/%Y")
+                e = datetime.strptime(self.custom_end, "%Y-%m-%d").strftime("%d/%m/%Y")
+                return {"start": s, "end": e}
+            except ValueError:
+                pass
         row = self.db.fetch_one(
             f"""
             SELECT
@@ -262,9 +288,18 @@ class ReportBackend:
         return data
 
     def fallback_data(self, active_tab):
+        start_display = "-"
+        end_display = "-"
+        if active_tab == "Custom" and self.custom_start and self.custom_end:
+            from datetime import datetime
+            try:
+                start_display = datetime.strptime(self.custom_start, "%Y-%m-%d").strftime("%d/%m/%Y")
+                end_display = datetime.strptime(self.custom_end, "%Y-%m-%d").strftime("%d/%m/%Y")
+            except ValueError:
+                pass
         return {
             "today": datetime.now().strftime("%d/%m/%Y"),
-            "range": {"start": "-", "end": "-"},
+            "range": {"start": start_display, "end": end_display},
             "bar_title": f"Revenue Trend - {active_tab}",
             "bar_data": [("-", 0)],
             "stats": [("Total Revenue", "0M", ""), ("Transactions", "0", ""), ("Room Occupancy", "0%", "")],
@@ -358,6 +393,8 @@ class ReportDashboard(tk.Tk):
 
         self.images = []
         self.backend = ReportBackend()
+        self._custom_start = ""
+        self._custom_end = ""
         self.report_data = self.backend.get_data(self._active_tab)
 
         main = tk.Frame(self, bg=self.C_BG)
@@ -592,17 +629,31 @@ class ReportDashboard(tk.Tk):
         _round_rect(cv, cx0, dr_y1, cx0 + 550, dr_y2, radius=dr_r, fill=self.C_WHITE)
         cv.create_text(cx0 + 18, (dr_y1 + dr_y2) // 2,
                        text="Custom", font=self.F_TAB, fill=self.C_TEXT, anchor="w")
+
+        is_custom = self._active_tab == "Custom"
+        date_fill = self.C_ACTIVE if is_custom else self.C_TEXT
+        s_tag = "cst_s" if is_custom else ""
         cv.create_text(cx0 + 90, (dr_y1 + dr_y2) // 2,
-                       text=self.report_data["range"]["start"], font=self.F_DATE, fill=self.C_TEXT, anchor="w")
-        # calendar icon placeholder
+                       text=self.report_data["range"]["start"], font=self.F_DATE,
+                       fill=date_fill, anchor="w", tags=s_tag)
+        cal1_tag = "cst_c1" if is_custom else ""
         cv.create_text(cx0 + 185, (dr_y1 + dr_y2) // 2,
-                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w")
+                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags=cal1_tag)
         cv.create_text(cx0 + 210, (dr_y1 + dr_y2) // 2,
                        text="→", font=self.F_DATE, fill=self.C_TEXT, anchor="w")
+        e_tag = "cst_e" if is_custom else ""
         cv.create_text(cx0 + 238, (dr_y1 + dr_y2) // 2,
-                       text=self.report_data["range"]["end"], font=self.F_DATE, fill=self.C_TEXT, anchor="w")
+                       text=self.report_data["range"]["end"], font=self.F_DATE,
+                       fill=date_fill, anchor="w", tags=e_tag)
+        cal2_tag = "cst_c2" if is_custom else ""
         cv.create_text(cx0 + 343, (dr_y1 + dr_y2) // 2,
-                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w")
+                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags=cal2_tag)
+
+        if is_custom:
+            for tag in ("cst_s", "cst_e", "cst_c1", "cst_c2"):
+                cv.tag_bind(tag, "<Button-1>", lambda e: self._edit_custom_date())
+                cv.tag_bind(tag, "<Enter>", lambda e: cv.config(cursor="hand2"))
+                cv.tag_bind(tag, "<Leave>", lambda e: cv.config(cursor=""))
 
         # ── CAT BANNER IMAGE ──
         img_path = os.path.join(_dir, "image", "report.jpg")
@@ -617,9 +668,9 @@ class ReportDashboard(tk.Tk):
         card_y2 = 130 + y + 180  # Ends at 310 + y, perfectly aligned with the cat banner's bottom
         _round_rect(cv, card_x1, card_y1, card_x2, card_y2, radius=26, fill=self.C_WHITE)
 
-        tabs = ["Today", "This week", "This month", "Last month"]
-        tab_w, tab_h = 240, 42
-        tab_gap = 12
+        tabs = ["Today", "This week", "This month", "Last month", "Custom"]
+        tab_w, tab_h = 240, 32
+        tab_gap = 8
         tab_y_start = card_y1 + 12
 
         for tab in tabs:
@@ -794,9 +845,86 @@ class ReportDashboard(tk.Tk):
                        font=("Baghdad", max(10, int(16 * self._s)), "bold"),
                        fill="#C83040", anchor="e")
 
+    def _edit_custom_date(self):
+        """Open a dialog to pick custom start/end dates."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Custom Date Range")
+        dialog.configure(bg="#FFFFFF")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        fw, fh = 340, 220
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        dialog.geometry(f"{fw}x{fh}+{(sw-fw)//2}+{(sh-fh)//2}")
+        dialog.resizable(False, False)
+
+        pad = 20
+        tk.Label(dialog, text="Start Date (DD/MM/YYYY):",
+                 font=("Arial", 11), bg="#FFFFFF", anchor="w").pack(
+                     fill="x", padx=pad, pady=(pad, 2))
+        start_et = tk.Entry(dialog, font=("Arial", 12), width=14, justify="center")
+        start_et.pack(padx=pad, fill="x")
+        start_et.insert(0, self._custom_start)
+
+        tk.Label(dialog, text="End Date (DD/MM/YYYY):",
+                 font=("Arial", 11), bg="#FFFFFF", anchor="w").pack(
+                     fill="x", padx=pad, pady=(10, 2))
+        end_et = tk.Entry(dialog, font=("Arial", 12), width=14, justify="center")
+        end_et.pack(padx=pad, fill="x")
+        end_et.insert(0, self._custom_end)
+
+        err_var = tk.StringVar()
+        err_lbl = tk.Label(dialog, textvariable=err_var,
+                           font=("Arial", 10), fg="red", bg="#FFFFFF")
+        err_lbl.pack(fill="x", padx=pad)
+
+        def apply():
+            s = start_et.get().strip()
+            e = end_et.get().strip()
+            from datetime import datetime
+            try:
+                if s:
+                    datetime.strptime(s, "%d/%m/%Y")
+                if e:
+                    datetime.strptime(e, "%d/%m/%Y")
+            except ValueError:
+                err_var.set("Invalid date format. Use DD/MM/YYYY.")
+                return
+            if not s or not e:
+                err_var.set("Please enter both start and end dates.")
+                return
+            self._custom_start = s
+            self._custom_end = e
+            dialog.destroy()
+            self._switch_report_tab("Custom")
+
+        btn_frame = tk.Frame(dialog, bg="#FFFFFF")
+        btn_frame.pack(fill="x", padx=pad, pady=(5, pad))
+        tk.Button(btn_frame, text="Cancel", font=("Arial", 11),
+                  command=dialog.destroy, bg="#E0D8D0", padx=15).pack(side="left")
+        tk.Button(btn_frame, text="Apply", font=("Arial", 11, "bold"),
+                  command=apply, bg="#8BB553", fg="white", padx=20).pack(side="right")
+
+        start_et.focus_set()
+        start_et.bind("<Return>", lambda e: end_et.focus_set())
+        end_et.bind("<Return>", lambda e: apply())
+
     def _switch_report_tab(self, tab_name):
         self._active_tab = tab_name
-        self.report_data = self.backend.get_data(tab_name)
+        if tab_name == "Custom":
+            from datetime import datetime
+            if not self._custom_start or not self._custom_end:
+                now = datetime.now()
+                self._custom_start = f"01/{now.month:02d}/{now.year}"
+                self._custom_end = now.strftime("%d/%m/%Y")
+            try:
+                s = datetime.strptime(self._custom_start, "%d/%m/%Y").strftime("%Y-%m-%d")
+                e = datetime.strptime(self._custom_end, "%d/%m/%Y").strftime("%Y-%m-%d")
+            except ValueError:
+                s = e = None
+            self.report_data = self.backend.get_data(tab_name, custom_start=s, custom_end=e)
+        else:
+            self.report_data = self.backend.get_data(tab_name)
         self.canvas.delete("all")
         self.images = self.images[:1]
         self.draw_content()

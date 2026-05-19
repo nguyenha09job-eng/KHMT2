@@ -139,7 +139,12 @@ class CustomerPetDashboard(tk.Tk):
 
         self.images = []
         self.backend = CustomerPetBackend()
-        self.table_data = self.load_customer_pets()
+        self.all_data = self.load_customer_pets()
+        self.table_data = list(self.all_data)
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search_change)
+        self._search_updating = False
+        self._search_entry = None
 
         # ── Layout ──
         main = tk.Frame(self, bg=self.C_BG)
@@ -170,6 +175,7 @@ class CustomerPetDashboard(tk.Tk):
         self.sidebar_canvas.scale("all", 0, 0, s, s)
         self.draw_content()
         self.canvas.scale("all", 0, 0, s, s)
+        self._create_search_entry()
 
         self.canvas.update_idletasks()
         bbox = self.canvas.bbox("all")
@@ -193,6 +199,60 @@ class CustomerPetDashboard(tk.Tk):
         except Exception as exc:
             print(f"Khong the tai du lieu Customer & Pet: {exc}")
             return []
+
+    def _create_search_entry(self):
+        """Place Entry widget over the search bar on content_container (persistent)."""
+        if self._search_entry is not None:
+            return
+        s = self._s
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
+        s_y1 = 268 + y_off
+        s_y2 = 304 + y_off
+        entry_x = int((330 + dx) * s)
+        entry_y = int((s_y1 + 6) * s)
+        entry_w = int(760 * s)
+        entry_h = int((s_y2 - s_y1 - 12) * s)
+        self._search_entry = tk.Entry(
+            self.content_container,
+            textvariable=self.search_var,
+            font=self.F_SEARCH,
+            bg=self.C_WHITE,
+            fg=self.C_TEXT,
+            bd=0,
+            highlightthickness=0,
+            insertbackground=self.C_TEXT,
+        )
+        self._search_entry.place(x=entry_x, y=entry_y, width=entry_w, height=entry_h)
+        self._search_entry.focus_set()
+
+    def _on_search_change(self, *args):
+        """Filter table data on search text change and redraw."""
+        if self._search_updating:
+            return
+        self._search_updating = True
+        query = self.search_var.get().strip().lower()
+        if not query:
+            self.table_data = list(self.all_data)
+        else:
+            self.table_data = [
+                row for row in self.all_data
+                if query in row["customer"].lower()
+                or query in row["phone"].lower()
+                or query in row["pet_name"].lower()
+            ]
+        self._redraw_table()
+        self._search_updating = False
+
+    def _redraw_table(self):
+        """Clear canvas and redraw content. Entry widget persists on content_container."""
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -299,7 +359,7 @@ class CustomerPetDashboard(tk.Tk):
         x2 = x1 + chip_w
         y2 = y1 + chip_h
         _round_rect(cv, x1, y1, x2, y2, radius=chip_h // 2, fill=bg)
-        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=self.C_TEXT, width=chip_w - 10)
+        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=self.C_TEXT, width=int((chip_w - 10) * self._s))
 
     # ─────────────────────────── MAIN CONTENT ───────────────────────
     def draw_content(self):
@@ -346,7 +406,7 @@ class CustomerPetDashboard(tk.Tk):
         # Column headers
         hdr_y = tbl_y1 + 35
         cols    = ["Customer", "Phone", "Pets", "Points", "Membership"]
-        col_xs  = [330 + dx, 460 + dx, 570 + dx, 680 + dx, 790 + dx]
+        col_xs  = [320 + dx, 500 + dx, 605 + dx, 765 + dx, 860 + dx]
 
         for col, cx in zip(cols, col_xs):
             cv.create_text(cx, hdr_y, text=col, font=self.F_TABLE_HEAD,
@@ -357,27 +417,6 @@ class CustomerPetDashboard(tk.Tk):
                        fill=self.C_DIVIDER, width=1)
 
         # Table data
-        table_data = [
-            {
-                "customer": "Nguyễn Lan",
-                "phone":    "012345678",
-                "pet_name": "Milo",
-                "pet_emoji":"🐶",
-                "pet_chip": self.C_DOG_CHIP,
-                "points":   "1.230P",
-                "membership":"VIP",
-            },
-            {
-                "customer": "Nguyễn Lan",
-                "phone":    "012345678",
-                "pet_name": "Moa",
-                "pet_emoji":"🐱",
-                "pet_chip": self.C_CAT_CHIP,
-                "points":   "1.230P",
-                "membership":"VIP",
-            },
-        ]
-
         table_data = self.table_data
         if not table_data:
             cv.create_text(725 + dx, hdr_y + 75,
@@ -390,12 +429,12 @@ class CustomerPetDashboard(tk.Tk):
             rcy = ry + row_h // 2
 
             cv.create_text(col_xs[0], rcy, text=row["customer"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=120)
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=int(175 * self._s))
             cv.create_text(col_xs[1], rcy, text=row["phone"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
 
             # Pet chip centred in the Pets column
-            chip_cx = col_xs[2] + 42
+            chip_cx = col_xs[2] + 70
             self._draw_pet_chip(cv, chip_cx, rcy,
                                 row["pet_label"], row["pet_name"],
                                 self._pet_chip_color(row["pet_chip"]))
@@ -403,7 +442,7 @@ class CustomerPetDashboard(tk.Tk):
             cv.create_text(col_xs[3], rcy, text=row["points"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
             cv.create_text(col_xs[4], rcy, text=row["membership"],
-                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=130)
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w", width=int(175 * self._s))
 
             # Profile button
             pbw, pbh = 90, 30

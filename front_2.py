@@ -73,7 +73,7 @@ class CareViewBackend:
             JOIN rooms r ON r.room_id = b.room_id
             JOIN room_types rt ON rt.room_type_id = r.room_type_id
             LEFT JOIN services s ON s.booking_id = b.booking_id
-                AND s.service_date = CURDATE()
+
             LEFT JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()

@@ -558,6 +558,7 @@ class BookingDashboard(tk.Tk):
             "membership": tk.StringVar(value="No"),
             "species": tk.StringVar(value="Dog"),
             "gender": tk.StringVar(value="Male"),
+            "room_type": tk.StringVar(value="Small Dog Room"),
         }
         self.chip_groups = {}
         self.toggle_vars = {}
@@ -886,7 +887,17 @@ class BookingDashboard(tk.Tk):
         self._add_section_label(form_frame, "Booking", form_pad)
         row5 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row5.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row5, "Room type", "ex: Small Dog Room", side=tk.LEFT, expand=True, key="room_type")
+        rt_frame = tk.Frame(row5, bg=self.C_CARD_BG)
+        rt_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, int(10*s)))
+        tk.Label(rt_frame, text="Room type", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+        rt_row1 = tk.Frame(rt_frame, bg=self.C_CARD_BG)
+        rt_row1.pack(anchor="w")
+        for chip in ["Small Dog Room", "Medium Dog Room"]:
+            self._add_chip(rt_row1, chip, group="room_type")
+        rt_row2 = tk.Frame(rt_frame, bg=self.C_CARD_BG)
+        rt_row2.pack(anchor="w", pady=(int(3*s), 0))
+        for chip in ["Large Dog Room", "Cat Room", "Family Room"]:
+            self._add_chip(rt_row2, chip, group="room_type")
 
         price_f = tk.Frame(row5, bg=self.C_CARD_BG)
         price_f.pack(side=tk.LEFT, padx=(int(10*s), 0))
@@ -1245,7 +1256,7 @@ class BookingDashboard(tk.Tk):
             "health_condition": self._entry_value("health_condition"),
             "behaviour_note": self._entry_value("behaviour_note"),
             "special_requirement": self._entry_value("special_requirement"),
-            "room_type": self._entry_value("room_type"),
+            "room_type": self.choice_vars["room_type"].get(),
             "room": self._entry_value("room"),
             "service": self._entry_value("service"),
             "check_in": self._entry_value("check_in"),

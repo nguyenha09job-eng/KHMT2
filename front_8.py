@@ -152,7 +152,7 @@ class CustomerProfileBackend:
             history.append({
                 "booking": f"#{row.get('booking_id')}",
                 "pet": pet_label,
-                "dates": f"{self._format_short_date(row.get('check_in'))} ->\n{self._format_short_date(row.get('check_out'))}",
+                "dates": f"{self._format_short_date(row.get('check_in'))} -> {self._format_short_date(row.get('check_out'))}",
                 "amount": self._format_money(row.get("amount")),
             })
         return history
@@ -230,9 +230,9 @@ class CustomerProfilePopup(tk.Tk):
         self.F_TITLE   = ("Arial Rounded MT Bold", 20, "bold")
         self.F_SUB     = ("Baghdad", 14)
         self.F_CHIP    = ("Baghdad", 12, "bold")
-        self.F_HEADER  = ("Arial Rounded MT Bold", 16, "bold")
-        self.F_BODY    = ("Baghdad", 15)
-        self.F_TBL_HDR = ("Baghdad", 15)
+        self.F_HEADER  = ("Arial Rounded MT Bold", 18, "bold")
+        self.F_BODY    = ("Baghdad", 18)
+        self.F_TBL_HDR = ("Baghdad", 18)
 
         self.cv = tk.Canvas(self, width=self.W, height=self.H, bg="#E5E5E5", highlightthickness=0)
         self.cv.pack(fill=tk.BOTH, expand=True)

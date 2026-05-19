@@ -20,6 +20,20 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     return tuple(items)
 
 
+def _round_outline(cv, x1, y1, x2, y2, radius=25, color="white", width=4, tags=None):
+    d = 2 * radius
+    items = []
+    items.append(cv.create_arc(x1, y1, x1 + d, y1 + d, start=90, extent=90, style='arc', outline=color, width=width, tags=tags))
+    items.append(cv.create_arc(x2 - d, y1, x2, y1 + d, start=0, extent=90, style='arc', outline=color, width=width, tags=tags))
+    items.append(cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90, style='arc', outline=color, width=width, tags=tags))
+    items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='arc', outline=color, width=width, tags=tags))
+    items.append(cv.create_line(x1 + radius, y1, x2 - radius, y1, fill=color, width=width, tags=tags))
+    items.append(cv.create_line(x2, y1 + radius, x2, y2 - radius, fill=color, width=width, tags=tags))
+    items.append(cv.create_line(x1 + radius, y2, x2 - radius, y2, fill=color, width=width, tags=tags))
+    items.append(cv.create_line(x1, y1 + radius, x1, y2 - radius, fill=color, width=width, tags=tags))
+    return tuple(items)
+
+
 class RoomsBackend:
     """Data layer for the Rooms screen."""
 
@@ -157,7 +171,10 @@ class RoomsDashboard(tk.Tk):
         self.F_IMG_LABEL   = ("Arial Rounded MT Bold", max(14, int(26 * s)), "bold")
 
         self.images = []
+        self.search_text = ""
+        self._search_entry = None
         self.current_filter = "all"  # "all", "dog", or "cat"
+        self.status_filter = "all"   # "all", "Occupied", "Available", or "Cleaning"
         self.backend = RoomsBackend()
         self.data = self.load_rooms()
 
@@ -223,6 +240,21 @@ class RoomsDashboard(tk.Tk):
             self.current_filter = "all"
         else:
             self.current_filter = new_filter
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+
+    def set_status_filter(self, new_filter):
+        """Toggle status filter: click same filter again → show all."""
+        if self.status_filter == new_filter:
+            self.status_filter = "all"
+        else:
+            self.status_filter = new_filter
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -343,7 +375,23 @@ class RoomsDashboard(tk.Tk):
         y  = self.Y_OFF
         _dir = os.path.dirname(__file__)
         summary = self.data["summary"]
-        rooms = self.data["rooms"]
+        if self.status_filter != "all":
+            rooms = {
+                "dog": [r for r in self.data["rooms"]["dog"] if r["status"] == self.status_filter],
+                "cat": [r for r in self.data["rooms"]["cat"] if r["status"] == self.status_filter],
+                "both": [r for r in self.data["rooms"]["both"] if r["status"] == self.status_filter],
+            }
+        else:
+            rooms = self.data["rooms"]
+
+        # Apply search filter
+        search_lower = self.search_text.strip().lower()
+        if search_lower:
+            rooms = {
+                k: [r for r in v if search_lower in r["room"].lower()
+                    or search_lower in r["type"].lower()]
+                for k, v in rooms.items()
+            }
 
         # ── HEADER BAR ──
         _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 68 + y, radius=20, fill=self.C_WHITE)
@@ -388,8 +436,8 @@ class RoomsDashboard(tk.Tk):
         else:
             bx = None
         if bx is not None:
-            cv.create_rectangle(bx - 3, img_y - 3, bx + border_w + 3, img_y + img_h + 3,
-                               outline=self.C_TEXT, width=4, tags="filter_border")
+            _round_outline(cv, bx, img_y, bx + border_w, img_y + img_h,
+                           radius=16, color=self.C_WHITE, width=4, tags="filter_border")
 
         # Legend box
         leg_x1, leg_y1 = 856 + dx, img_y
@@ -404,30 +452,48 @@ class RoomsDashboard(tk.Tk):
         occ_y1 = leg_y1 + 12
         occ_x1 = chip_cx - chip_w // 2
         _round_rect(cv, occ_x1, occ_y1, occ_x1 + chip_w, occ_y1 + chip_h,
-                    radius=chip_r, fill=self.C_OCC_CHIP)
+                    radius=chip_r, fill=self.C_OCC_CHIP, tags="filter_occupied")
         cv.create_text(chip_cx, occ_y1 + chip_h // 2,
-                       text="Occupied", font=self.F_LEGEND, fill=self.C_TEXT)
+                       text="Occupied", font=self.F_LEGEND, fill=self.C_TEXT, tags="filter_occupied")
+        cv.tag_bind("filter_occupied", "<Button-1>", lambda e: self.set_status_filter("Occupied"))
 
         # Available chip
         avl_y1 = occ_y1 + chip_h + 8
         _round_rect(cv, occ_x1, avl_y1, occ_x1 + chip_w, avl_y1 + chip_h,
-                    radius=chip_r, fill=self.C_AVL_CHIP)
+                    radius=chip_r, fill=self.C_AVL_CHIP, tags="filter_available")
         cv.create_text(chip_cx, avl_y1 + chip_h // 2,
-                       text="Available", font=self.F_LEGEND, fill=self.C_TEXT)
+                       text="Available", font=self.F_LEGEND, fill=self.C_TEXT, tags="filter_available")
+        cv.tag_bind("filter_available", "<Button-1>", lambda e: self.set_status_filter("Available"))
 
         clean_y1 = avl_y1 + chip_h + 8
         _round_rect(cv, occ_x1, clean_y1, occ_x1 + chip_w, clean_y1 + chip_h,
-                    radius=chip_r, fill=self.C_CLEAN_CHIP)
+                    radius=chip_r, fill=self.C_CLEAN_CHIP, tags="filter_cleaning")
         cv.create_text(chip_cx, clean_y1 + chip_h // 2,
-                       text="Cleaning", font=self.F_LEGEND, fill=self.C_TEXT)
+                       text="Cleaning", font=self.F_LEGEND, fill=self.C_TEXT, tags="filter_cleaning")
+        cv.tag_bind("filter_cleaning", "<Button-1>", lambda e: self.set_status_filter("Cleaning"))
+
+        # Highlight active status filter border
+        if self.status_filter == "Occupied":
+            _round_outline(cv, occ_x1 - 1, occ_y1 - 1, occ_x1 + chip_w + 1, occ_y1 + chip_h + 1,
+                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
+        elif self.status_filter == "Available":
+            _round_outline(cv, occ_x1 - 1, avl_y1 - 1, occ_x1 + chip_w + 1, avl_y1 + chip_h + 1,
+                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
+        elif self.status_filter == "Cleaning":
+            _round_outline(cv, occ_x1 - 1, clean_y1 - 1, occ_x1 + chip_w + 1, clean_y1 + chip_h + 1,
+                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
 
         # ── SEARCH BAR ──
         s_y1, s_y2 = 216 + y, 252 + y
         s_r = (s_y2 - s_y1) // 2
         _round_rect(cv, 300 + dx, s_y1, 1150 + dx, s_y2, radius=s_r, fill=self.C_WHITE)
         cv.create_text(338 + dx, (s_y1 + s_y2) // 2,
-                       text="Search room_id", font=self.F_SEARCH,
-                       fill="#B5B0AA", anchor="w")
+                       text="", font=self.F_SEARCH, anchor="w")
+        # Search entry overlay
+        search_x = (300 + dx + 1150 + dx) // 2
+        search_y = (s_y1 + s_y2) // 2
+        search_w = int(570 * self._s)
+        search_h = int((s_y2 - s_y1) * self._s * 0.55)
         ic_cx, ic_cy = 1125 + dx, (s_y1 + s_y2) // 2
         ic_r = 9
         cv.create_oval(ic_cx - ic_r, ic_cy - ic_r, ic_cx + ic_r, ic_cy + ic_r,
@@ -435,6 +501,28 @@ class RoomsDashboard(tk.Tk):
         cv.create_line(ic_cx + int(ic_r * 0.72), ic_cy + int(ic_r * 0.72),
                        ic_cx + int(ic_r * 1.65), ic_cy + int(ic_r * 1.65),
                        fill=self.C_TEXT, width=2)
+
+        # Search entry widget
+        if self._search_entry is None:
+            self._search_entry = tk.Entry(cv, font=self.F_SEARCH, relief=tk.FLAT,
+                                          bg=self.C_WHITE, fg="#B5B0AA",
+                                          highlightthickness=0,
+                                          insertbackground=self.C_TEXT)
+            self._search_entry.insert(0, "Search room_id")
+            self._search_entry.bind("<KeyRelease>", self._on_search_key)
+            self._search_entry.bind("<FocusIn>", self._on_search_focusin)
+            self._search_entry.bind("<FocusOut>", self._on_search_focusout)
+
+        cv.create_window(search_x, search_y, window=self._search_entry,
+                         anchor="center", width=search_w,
+                         tags="search_entry")
+
+        # Search results count
+        if self.search_text:
+            total = sum(len(v) for v in rooms.values())
+            cv.create_text(1130 + dx, (s_y1 + s_y2) // 2,
+                           text=f"{total} found", font=self.F_LEGEND,
+                           fill=self.C_TEXT_LIGHT, anchor="e", tags="search_count")
 
         # ── DOG SECTION ──
         sec_y = 270 + y
@@ -461,6 +549,43 @@ class RoomsDashboard(tk.Tk):
                            font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
             family_grid_y = next_y + 30
             self._draw_room_grid(cv, dx, family_grid_y, rooms["both"])
+
+    def _on_search_key(self, event):
+        """Handle key release in search entry."""
+        if event.keysym in ("Escape", "Tab", "Up", "Down", "Left", "Right", "Return"):
+            if event.keysym == "Escape":
+                self._search_entry.delete(0, tk.END)
+                self._search_entry.insert(0, "Search room_id")
+                self._search_entry.config(fg="#B5B0AA")
+                self.canvas.focus_set()
+            return
+
+        text = self._search_entry.get()
+        if text == "Search room_id":
+            text = ""
+
+        if text.strip().lower() != self.search_text.lower():
+            self.search_text = text.strip()
+            self.canvas.delete("all")
+            self.draw_content()
+            self.canvas.scale("all", 0, 0, self._s, self._s)
+            self.canvas.update_idletasks()
+            bbox = self.canvas.bbox("all")
+            if bbox:
+                self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+    def _on_search_focusin(self, event):
+        """Clear placeholder on focus."""
+        if self._search_entry.get() == "Search room_id":
+            self._search_entry.delete(0, tk.END)
+            self._search_entry.config(fg=self.C_TEXT)
+
+    def _on_search_focusout(self, event):
+        """Restore placeholder when empty and focus lost."""
+        if self._search_entry.get().strip() == "":
+            self._search_entry.delete(0, tk.END)
+            self._search_entry.insert(0, "Search room_id")
+            self._search_entry.config(fg="#B5B0AA")
 
     def _grid_height(self, n_rooms):
         """Calculate the pixel height of a room grid with n_rooms."""

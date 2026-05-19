@@ -158,12 +158,6 @@ class BillingBackend:
                 (),
                 "Next unpaid",
             ),
-            (
-                "WHERE bl.payment_id IS NOT NULL",
-                "ORDER BY b.check_out DESC, bl.payment_date DESC, b.booking_id DESC",
-                (),
-                "Latest paid",
-            ),
         ]
         for where_clause, order_clause, params, label in candidates:
             row = self._booking_query(where_clause, order_clause, params)
@@ -179,15 +173,15 @@ class BillingBackend:
                 c.full_name,
                 p.pet_name,
                 b.check_out,
-                bl.total_amount,
-                pm.method_name,
-                bl.payment_method_id
-            FROM billing bl
-            JOIN bookings b ON b.booking_id = bl.booking_id
+                b.room_price
+            FROM bookings b
             JOIN customers c ON c.customer_id = b.customer_id
             JOIN pets p ON p.pet_id = b.pet_id
-            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
-            ORDER BY COALESCE(bl.payment_date, b.check_out) DESC, b.booking_id DESC
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            WHERE (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)
+              AND bs.status_name IN ('booked', 'checked_in')
+            ORDER BY b.check_out, b.booking_id
             LIMIT %s
             """,
             (limit,),
@@ -198,9 +192,9 @@ class BillingBackend:
                 "booking_id": row.get("booking_id"),
                 "customer_pet": f"{row.get('full_name') or '-'} - {row.get('pet_name') or '-'}",
                 "date": self._full_date(row.get("check_out")),
-                "amount": self._money(row.get("total_amount")),
-                "method": self._title(row.get("method_name"), "-"),
-                "status": "Paid" if row.get("payment_method_id") else "Unpaid",
+                "amount": self._money(row.get("room_price")),
+                "method": "-",
+                "status": "Unpaid",
             })
         return history
 
@@ -635,7 +629,7 @@ class BillingDashboard(tk.Tk):
         # 5. BOOKING HISTORY
         # -------------------------------------------------
         hist_y = card_y2 + 40
-        cv.create_text(L_PAD, hist_y, text="Booking History", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        cv.create_text(L_PAD, hist_y, text="Unpaid Bookings", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = hist_y + 20
         row_count = max(len(history), 1)
@@ -653,7 +647,7 @@ class BillingDashboard(tk.Tk):
 
         row_y = h_y + 40
         if not history:
-            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No paid billing history found",
+            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No unpaid bookings found",
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT)
         for i, item in enumerate(history):
             cv.create_text(cols_x[0], row_y, text=str(item["booking_id"]), font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")

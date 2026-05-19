@@ -155,9 +155,9 @@ class PetPopup(tk.Tk):
         self.F_TITLE   = ("Arial Rounded MT Bold", 22, "bold")
         self.F_SUB     = ("Baghdad", 14)
         self.F_CHIP    = ("Baghdad", 12, "bold")
-        self.F_HEADER  = ("Arial Rounded MT Bold", 16, "bold")
-        self.F_BODY    = ("Baghdad", 16)
-        self.F_LINK    = ("Baghdad", 16, "underline")
+        self.F_HEADER  = ("Arial Rounded MT Bold", 18, "bold")
+        self.F_BODY    = ("Baghdad", 18)
+        self.F_LINK    = ("Baghdad", 18, "underline")
 
         # Canvas cho Pop-up
         self.cv = tk.Canvas(self, width=520, height=680, bg="#E5E5E5", highlightthickness=0)

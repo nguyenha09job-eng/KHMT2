@@ -253,7 +253,7 @@ class DashboardBackend:
               AND DATE(b.check_in) <= CURDATE()
               AND DATE(b.check_out) >= CURDATE()
             ORDER BY s.status, p.pet_name
-            LIMIT 50
+            LIMIT 100
             """
         )
         return rows or []
@@ -326,6 +326,7 @@ class PetDashboard(tk.Tk):
         self.F_TABLE_ROW = ("Baghdad", max(10, int(15 * s)))
 
         self.images = []
+        self.service_filter = "all"  # "all", "done", "not_done"
 
         # -- Data from backend --
         self.backend = DashboardBackend()
@@ -494,6 +495,78 @@ class PetDashboard(tk.Tk):
     def logout(self):
         self.destroy()
 
+    def _set_service_filter(self, tag):
+        """Update Today's Services filter and redraw only that table."""
+        self.service_filter = tag
+        # Save current scroll position so view doesn't jump
+        yview_pos = self.canvas.yview()[0]
+        # Destroy old TS child widgets
+        if hasattr(self, 'ts_child') and self.ts_child:
+            self.ts_child.destroy()
+            self.ts_child = None
+        if hasattr(self, 'ts_sb') and self.ts_sb:
+            self.ts_sb.destroy()
+            self.ts_sb = None
+        # Redraw only the TS portion of the header (filter chips + card)
+        self._redraw_ts_header()
+        # Recreate scrollable rows for TS
+        self._add_today_services_rows()
+        # Restore scroll position to prevent view from jumping
+        self.canvas.update_idletasks()
+        self.canvas.yview_moveto(yview_pos)
+
+    def _redraw_ts_header(self):
+        """Redraw only Today's Services section header and filter chips on main canvas."""
+        cv = self.canvas
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
+        # Delete old TS header items by tag
+        cv.delete("ts_header")
+        cv.delete("svc_filter_all")
+        cv.delete("svc_filter_done")
+        cv.delete("svc_filter_not_done")
+        # Redraw title and card background
+        cv.create_text(315+dx, 695+y_off, text="Today's Services",
+                       font=self.F_SECTION, fill=self.C_TEXT, anchor="w", tags="ts_header")
+        filters = [("All", 45, "all"), ("Done", 55, "done"), ("Not Done", 80, "not_done")]
+        fx = 500 + dx
+        fy = 683 + y_off
+        fh = 22
+        fr = fh // 2
+        for label, fw, tag in filters:
+            is_active = (self.service_filter == tag)
+            chip_tag = f"svc_filter_{tag}"
+            if is_active:
+                _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
+                            fill=self.C_TEXT, outline="", tags=(chip_tag, "ts_header"))
+                cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
+                               font=("Baghdad", max(9, int(13 * self._s)), "bold"),
+                               fill=self.C_WHITE, tags=(chip_tag, "ts_header"))
+            else:
+                _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
+                            fill="#E8DDD8", outline="", tags=(chip_tag, "ts_header"))
+                cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
+                               font=("Baghdad", max(9, int(13 * self._s)), "bold"),
+                               fill=self.C_TEXT, tags=(chip_tag, "ts_header"))
+            cv.tag_bind(chip_tag, "<Button-1>",
+                        lambda e, name=tag: self._set_service_filter(name))
+            fx += fw + 8
+        _round_rect(cv, 300+dx, 715+y_off, 1150+dx, 990+y_off, radius=30,
+                    fill=self.C_WHITE, outline="", tags="ts_header")
+        # Column headers
+        cols2 = ["Pet", "Service", "Room", "Status", "Frequency"]
+        xs2 = [365+dx, 475+dx, 605+dx, 765+dx, 905+dx]
+        for i, col in enumerate(cols2):
+            cv.create_text(xs2[i], 740+y_off, text=col, font=self.F_TABLE_HEAD,
+                           fill=self.C_TEXT, anchor="w", tags="ts_header")
+        cv.create_line(320+dx, 765+y_off, 1130+dx, 765+y_off,
+                       fill=self.C_TEXT_LIGHT, tags="ts_header")
+        # Re-scale these new items
+        s = self._s
+        cv.scale("ts_header", 0, 0, s, s)
+        for f in ["svc_filter_all", "svc_filter_done", "svc_filter_not_done"]:
+            cv.scale(f, 0, 0, s, s)
+
     def create_rounded_image(self, image_path, width, height, radius):
         s = self._s
         # Scale width, height, radius physically for the image
@@ -611,14 +684,44 @@ class PetDashboard(tk.Tk):
         # =========================
         # TODAY'S SERVICES (y: 695 → 990)
         # =========================
-        cv.create_text(315+dx, 695+y_off, text="Today's Services", font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
-        _round_rect(cv, 300+dx, 715+y_off, 1150+dx, 990+y_off, radius=30, fill=self.C_WHITE, outline="")
+        cv.create_text(315+dx, 695+y_off, text="Today's Services", font=self.F_SECTION,
+                       fill=self.C_TEXT, anchor="w", tags="ts_header")
+
+        # Service status filter chips
+        filters = [("All", 45, "all"), ("Done", 55, "done"), ("Not Done", 80, "not_done")]
+        fx = 500 + dx
+        fy = 683 + y_off
+        fh = 22
+        fr = fh // 2
+        for label, fw, tag in filters:
+            is_active = (self.service_filter == tag)
+            chip_tag = f"svc_filter_{tag}"
+            if is_active:
+                _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
+                            fill=self.C_TEXT, outline="", tags=(chip_tag, "ts_header"))
+                cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
+                               font=("Baghdad", max(9, int(13 * self._s)), "bold"),
+                               fill=self.C_WHITE, tags=(chip_tag, "ts_header"))
+            else:
+                _round_rect(cv, fx, fy, fx + fw, fy + fh, radius=fr,
+                            fill="#E8DDD8", outline="", tags=(chip_tag, "ts_header"))
+                cv.create_text(fx + fw / 2, fy + fh / 2, text=label,
+                               font=("Baghdad", max(9, int(13 * self._s)), "bold"),
+                               fill=self.C_TEXT, tags=(chip_tag, "ts_header"))
+            cv.tag_bind(chip_tag, "<Button-1>",
+                        lambda e, name=tag: self._set_service_filter(name))
+            fx += fw + 8
+
+        _round_rect(cv, 300+dx, 715+y_off, 1150+dx, 990+y_off, radius=30,
+                    fill=self.C_WHITE, outline="", tags="ts_header")
 
         cols2 = ["Pet", "Service", "Room", "Status", "Frequency"]
         xs2 = [365+dx, 475+dx, 605+dx, 765+dx, 905+dx]
         for i, col in enumerate(cols2):
-            cv.create_text(xs2[i], 740+y_off, text=col, font=self.F_TABLE_HEAD, fill=self.C_TEXT, anchor="w")
-        cv.create_line(320+dx, 765+y_off, 1130+dx, 765+y_off, fill=self.C_TEXT_LIGHT)
+            cv.create_text(xs2[i], 740+y_off, text=col, font=self.F_TABLE_HEAD,
+                           fill=self.C_TEXT, anchor="w", tags="ts_header")
+        cv.create_line(320+dx, 765+y_off, 1130+dx, 765+y_off,
+                       fill=self.C_TEXT_LIGHT, tags="ts_header")
 
     def _add_scrollable_rows(self):
         """Create child canvases with scrollbars for table rows (called after scaling)."""
@@ -640,16 +743,33 @@ class PetDashboard(tk.Tk):
         self._make_scrollable_table(ab_x, ab_y, ab_w, ab_h, ab_data, ab_rel_xs, row_h)
 
         # ---- Today's Services rows ----
-        ts_data = [
+        self._add_today_services_rows()
+
+    def _add_today_services_rows(self):
+        """Create scrollable Today's Services rows, filtered by service_filter."""
+        s = self._s
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
+        row_h = int(35 * s)
+
+        ts_all = [
             (s["pet"], s["service"], s["room"], s["status"], s["frequency"])
             for s in self.data["today_services"]
         ]
+        if self.service_filter == "done":
+            ts_data = [r for r in ts_all if str(r[3]).lower() == "done"]
+        elif self.service_filter == "not_done":
+            ts_data = [r for r in ts_all if str(r[3]).lower() != "done"]
+        else:
+            ts_data = ts_all
+
         ts_rel_xs = [45, 155, 285, 445, 585]
         ts_x = int((300 + dx + 20) * s)
         ts_y = int((771 + y_off) * s)
         ts_w = int(810 * s)
         ts_h = int(205 * s)
-        self._make_scrollable_table(ts_x, ts_y, ts_w, ts_h, ts_data, ts_rel_xs, row_h)
+        self.ts_child, self.ts_sb = self._make_scrollable_table(
+            ts_x, ts_y, ts_w, ts_h, ts_data, ts_rel_xs, row_h)
 
     def _make_scrollable_table(self, x, y, w, h, data, rel_xs, row_h):
         """Create a child canvas + optional scrollbar for table rows at scaled position."""
@@ -707,6 +827,8 @@ class PetDashboard(tk.Tk):
         if not hasattr(self, '_table_children'):
             self._table_children = []
         self._table_children.append(child)
+
+        return child, (sb if total_h > h else None)
 
 
 if __name__ == "__main__":
