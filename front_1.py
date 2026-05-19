@@ -226,8 +226,10 @@ class DashboardBackend:
             JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
             JOIN rooms r ON r.room_id = b.room_id
             WHERE bs.status_name IN ('checked_in', 'booked')
+              AND DATE(b.check_in) <= CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
             ORDER BY b.check_in DESC
-            LIMIT 6
+            LIMIT 50
             """
         )
         return rows or []
@@ -251,7 +253,7 @@ class DashboardBackend:
               AND DATE(b.check_in) <= CURDATE()
               AND DATE(b.check_out) >= CURDATE()
             ORDER BY s.status, p.pet_name
-            LIMIT 6
+            LIMIT 50
             """
         )
         return rows or []
@@ -367,6 +369,9 @@ class PetDashboard(tk.Tk):
         # Scale contents based on base coordinates
         self.sidebar_canvas.scale("all", 0, 0, s, s)
         self.canvas.scale("all", 0, 0, s, s)
+
+        # Add scrollable table rows (after scaling so positions are final)
+        self._add_scrollable_rows()
 
         # Update scrollregion
         self.canvas.update_idletasks()
@@ -585,10 +590,11 @@ class PetDashboard(tk.Tk):
         cv.create_text(cx, y2 - 20, text=subtext, font=self.F_STAT_SUB, fill=self.C_TEXT_LIGHT)
 
     def draw_tables(self):
+        """Draw section titles, card backgrounds and column headers only.
+        Scrollable rows are added after scaling via _add_scrollable_rows()."""
         cv = self.canvas
         dx = -self.BASE_SIDE_W
         y_off = self.Y_OFF
-        row_h = 35
 
         # =========================
         # ACTIVE BOOKINGS (y: 380 → 670)
@@ -602,20 +608,8 @@ class PetDashboard(tk.Tk):
             cv.create_text(xs1[i], 425+y_off, text=col, font=self.F_TABLE_HEAD, fill=self.C_TEXT, anchor="w")
         cv.create_line(320+dx, 450+y_off, 1130+dx, 450+y_off, fill=self.C_TEXT_LIGHT)
 
-        data1 = [
-            (b["pet"], b["owner"], b["check_in"], b["check_out"], b["status"], b["room"])
-            for b in self.data["active_bookings"]
-        ]
-        y = 475 + y_off
-        for ri, row in enumerate(data1):
-            for i, val in enumerate(row):
-                cv.create_text(xs1[i], y, text=val, font=self.F_TABLE_ROW, fill=self.C_TEXT, anchor="w")
-            if ri < len(data1) - 1:
-                cv.create_line(320+dx, y+17, 1130+dx, y+17, fill=self.C_TEXT_LIGHT)
-            y += row_h
-
         # =========================
-        # TODAY'S SERVICES (y: 695 → 955)
+        # TODAY'S SERVICES (y: 695 → 990)
         # =========================
         cv.create_text(315+dx, 695+y_off, text="Today's Services", font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
         _round_rect(cv, 300+dx, 715+y_off, 1150+dx, 990+y_off, radius=30, fill=self.C_WHITE, outline="")
@@ -626,17 +620,93 @@ class PetDashboard(tk.Tk):
             cv.create_text(xs2[i], 740+y_off, text=col, font=self.F_TABLE_HEAD, fill=self.C_TEXT, anchor="w")
         cv.create_line(320+dx, 765+y_off, 1130+dx, 765+y_off, fill=self.C_TEXT_LIGHT)
 
-        data2 = [
+    def _add_scrollable_rows(self):
+        """Create child canvases with scrollbars for table rows (called after scaling)."""
+        s = self._s
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
+        row_h = int(35 * s)
+
+        # ---- Active Bookings rows ----
+        ab_data = [
+            (b["pet"], b["owner"], b["check_in"], b["check_out"], b["status"], b["room"])
+            for b in self.data["active_bookings"]
+        ]
+        ab_rel_xs = [45, 155, 285, 425, 560, 685]
+        ab_x = int((300 + dx + 20) * s)
+        ab_y = int((475 + y_off) * s)
+        ab_w = int(810 * s)
+        ab_h = int(185 * s)
+        self._make_scrollable_table(ab_x, ab_y, ab_w, ab_h, ab_data, ab_rel_xs, row_h)
+
+        # ---- Today's Services rows ----
+        ts_data = [
             (s["pet"], s["service"], s["room"], s["status"], s["frequency"])
             for s in self.data["today_services"]
         ]
-        y = 790 + y_off
-        for ri, row in enumerate(data2):
+        ts_rel_xs = [45, 155, 285, 445, 585]
+        ts_x = int((300 + dx + 20) * s)
+        ts_y = int((790 + y_off) * s)
+        ts_w = int(810 * s)
+        ts_h = int(190 * s)
+        self._make_scrollable_table(ts_x, ts_y, ts_w, ts_h, ts_data, ts_rel_xs, row_h)
+
+    def _make_scrollable_table(self, x, y, w, h, data, rel_xs, row_h):
+        """Create a child canvas + optional scrollbar for table rows at scaled position."""
+        s = self._s
+        total_h = len(data) * row_h + 5
+
+        if not data:
+            return
+
+        sb_w_base = 15
+        sb_w = int(sb_w_base * s)
+        child_w = w - sb_w - 4 if total_h > h else w
+
+        # Scale X coordinates to match the scaled canvas
+        xs = [int(rx * s) for rx in rel_xs]
+        line_y_off = int(17 * s)
+
+        child = tk.Canvas(self.canvas, bg=self.C_WHITE, highlightthickness=0, bd=0)
+        child.configure(scrollregion=(0, 0, child_w, total_h))
+
+        yy = row_h // 2
+        for ri, row in enumerate(data):
             for i, val in enumerate(row):
-                cv.create_text(xs2[i], y, text=val, font=self.F_TABLE_ROW, fill=self.C_TEXT, anchor="w")
-            if ri < len(data2) - 1:
-                cv.create_line(320+dx, y+17, 1130+dx, y+17, fill=self.C_TEXT_LIGHT)
-            y += row_h
+                child.create_text(xs[i], yy, text=str(val) if val else "",
+                                  font=self.F_TABLE_ROW, fill=self.C_TEXT, anchor="w")
+            if ri < len(data) - 1:
+                child.create_line(5, yy + line_y_off, child_w - 10, yy + line_y_off,
+                                  fill=self.C_TEXT_LIGHT)
+            yy += row_h
+
+        self.canvas.create_window(x, y, anchor="nw", window=child,
+                                  width=child_w, height=h)
+
+        if total_h > h:
+            sb = tk.Scrollbar(self.canvas, orient=tk.VERTICAL, command=child.yview)
+            child.configure(yscrollcommand=sb.set)
+            self.canvas.create_window(x + child_w + 2, y, anchor="nw",
+                                      window=sb, height=h)
+            if not hasattr(self, '_scrollbars'):
+                self._scrollbars = []
+            self._scrollbars.append(sb)
+
+            def _on_mw(event, ccv=child):
+                if sys.platform == "darwin":
+                    ccv.yview_scroll(int(-event.delta), "units")
+                else:
+                    ccv.yview_scroll(int(-event.delta / 120), "units")
+                return "break"
+
+            child.bind("<MouseWheel>", _on_mw)
+            child.bind("<Button-4>", lambda e, ccv=child: ccv.yview_scroll(-1, "units"))
+            child.bind("<Button-5>", lambda e, ccv=child: ccv.yview_scroll(1, "units"))
+            sb.bind("<MouseWheel>", lambda e: "break")
+
+        if not hasattr(self, '_table_children'):
+            self._table_children = []
+        self._table_children.append(child)
 
 
 if __name__ == "__main__":

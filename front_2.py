@@ -48,12 +48,8 @@ class CareViewBackend:
 
     @staticmethod
     def _is_need_attention(health, special):
-        health_text = (health or "").strip().lower()
         special_text = (special or "").strip().lower()
-        return (
-            health_text not in ("", "good", "normal", "healthy", "none")
-            or special_text not in ("", "none", "no", "n/a")
-        )
+        return special_text not in ("", "none", "no", "n/a")
 
     def get_pets(self):
         rows = self.db.fetch_all(
@@ -81,7 +77,7 @@ class CareViewBackend:
             LEFT JOIN service_catalog sc ON sc.service_type_id = s.service_type_id
             WHERE bs.status_name = 'checked_in'
               AND DATE(b.check_in) <= CURDATE()
-              AND DATE(b.check_out) > CURDATE()
+              AND DATE(b.check_out) >= CURDATE()
               AND LOWER(p.species) IN ('dog', 'cat')
             GROUP BY
                 b.booking_id, p.pet_name, p.species, p.breed, p.weight, p.gender,
@@ -192,7 +188,7 @@ class CareViewDashboard(tk.Tk):
         self.draw_sidebar()
         self.draw_header()
         self.draw_banner()
-        self.draw_pet_cards(self.pets)
+        self.draw_pet_cards(self.get_filtered_pets())
 
         # Scale
         self.sidebar_canvas.scale("all", 0, 0, s, s)
@@ -232,6 +228,27 @@ class CareViewDashboard(tk.Tk):
         except Exception as exc:
             print(f"Không thể tải dữ liệu Care View: {exc}")
             return []
+
+    def get_filtered_pets(self):
+        if self.current_filter == "Dog":
+            return [p for p in self.pets if p["type"] == "Dog"]
+        elif self.current_filter == "Cat":
+            return [p for p in self.pets if p["type"] == "Cat"]
+        elif self.current_filter == "Needs Attention":
+            return [p for p in self.pets if p["need"]]
+        return self.pets
+
+    def set_filter(self, filter_name):
+        self.current_filter = filter_name
+        self.canvas.delete("all")
+        self.draw_header()
+        self.draw_banner()
+        self.draw_pet_cards(self.get_filtered_pets())
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + 50 * self._s))
 
     # =====================================================
     # SIDEBAR (identical to front_1 but Care View active)
@@ -355,6 +372,7 @@ class CareViewDashboard(tk.Tk):
         cv = self.canvas
         dx = -self.BASE_SIDE_W
         y_off = self.Y_OFF
+        s = self._s
 
         # Header bar
         _round_rect(cv, 300+dx, 30+y_off, 1150+dx, 70+y_off, radius=20,
@@ -364,18 +382,31 @@ class CareViewDashboard(tk.Tk):
         cv.create_text(460+dx, 52+y_off, text=datetime.now().strftime("%A, %d/%m/%Y"),
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
-        # Filter buttons: All (active), Dog, Cat, Needs Attention
-        filters = [("All", 80), ("Dog", 70), ("Cat", 70), ("Needs Attention", 140)]
+        # Filter buttons: All, Dog, Cat, Needs Attention
+        filters = [
+            ("All", 80, "All"),
+            ("Dog", 70, "Dog"),
+            ("Cat", 70, "Cat"),
+            ("Needs Attention", 170, "Needs Attention"),
+        ]
         fx = 740 + dx
-        for label, fw in filters:
-            if label == "All":
+        for label, fw, tag in filters:
+            is_active = (label == self.current_filter)
+            tag_btn = f"filter_{tag.replace(' ', '_')}"
+            if is_active:
                 _round_rect(cv, fx, 30+y_off, fx+fw, 70+y_off, radius=20,
-                            fill=self.C_TEXT, outline="")
+                            fill=self.C_TEXT, outline="", tags=(tag_btn,))
                 cv.create_text(fx + fw/2, 50+y_off, text=label,
-                               font=("Baghdad", max(10, int(17 * self._s)), "bold"), fill=self.C_WHITE)
+                               font=("Baghdad", max(10, int(17 * s)), "bold"),
+                               fill=self.C_WHITE, tags=(tag_btn,))
             else:
+                _round_rect(cv, fx, 30+y_off, fx+fw, 70+y_off, radius=20,
+                            fill="", outline="", tags=(tag_btn,))
                 cv.create_text(fx + fw/2, 50+y_off, text=label,
-                               font=("Baghdad", max(10, int(17 * self._s)), "bold"), fill=self.C_TEXT)
+                               font=("Baghdad", max(10, int(17 * s)), "bold"),
+                               fill=self.C_TEXT, tags=(tag_btn,))
+            cv.tag_bind(tag_btn, "<Button-1>",
+                        lambda e, name=label: self.set_filter(name))
             fx += fw + 12
 
     # =====================================================
@@ -389,7 +420,7 @@ class CareViewDashboard(tk.Tk):
         _dir = os.path.dirname(__file__)
         banner_path = os.path.join(_dir, "image", "careview.jpg")
         banner_w, banner_h = 850, 200
-        banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.0)
+        banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.2)
         self.images.append(banner_tk)
         cv.create_image(300+dx, 75+y_off, image=banner_tk, anchor="nw")
 
