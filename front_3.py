@@ -479,7 +479,7 @@ class BookingBackend:
                         booking_id, pet_id, service_type_id, unit_price,
                         quantity, total_price, service_date, status
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, DATE(%s), 'pending')
+                    VALUES (%s, %s, %s, %s, %s, %s, DATE(%s), 'not_done')
                     """,
                     (
                         booking_id,
