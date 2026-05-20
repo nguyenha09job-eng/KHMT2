@@ -194,6 +194,22 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     return tuple(items)
 
 
+def _round_rect_outline(cv, x1, y1, x2, y2, radius=20, color="#D7D0CB", lw=1, tags=None):
+    d = 2 * radius
+    cv.create_arc(x1, y1, x1 + d, y1 + d, start=90, extent=90,
+                  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x2 - d, y1, x2, y1 + d, start=0, extent=90,
+                  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x2 - d, y2 - d, x2, y2, start=270, extent=90,
+                  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90,
+                  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_line(x1 + radius, y1, x2 - radius, y1, fill=color, width=lw, tags=tags)
+    cv.create_line(x2, y1 + radius, x2, y2 - radius, fill=color, width=lw, tags=tags)
+    cv.create_line(x1 + radius, y2, x2 - radius, y2, fill=color, width=lw, tags=tags)
+    cv.create_line(x1, y1 + radius, x1, y2 - radius, fill=color, width=lw, tags=tags)
+
+
 def _addr_extract(text):
     """Split address text into (number_prefix, street_name) for autocomplete."""
     tokens = text.split()
@@ -705,7 +721,7 @@ class BookingDashboard(AppWindow):
         result.paste(img, (0, 0), mask=mask)
         icon_tk = ImageTk.PhotoImage(result)
         self.images.append(icon_tk)
-        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
+        cv.create_image(125 - 65, 500, image=icon_tk, anchor="nw")
 
         # Logout
         base_bottom = self.H / self._s
@@ -1560,19 +1576,96 @@ class BookingDashboard(AppWindow):
             "check_out": self._entry_value("check_out"),
         }
 
+    def _show_booking_success_popup(self, result):
+        width = 540
+        height = 420
+        dialog = tk.Toplevel(self)
+        dialog.title("Booking confirmed")
+        dialog.configure(bg=self.C_BG)
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        cv = tk.Canvas(dialog, width=width, height=height,
+                       bg=self.C_BG, highlightthickness=0)
+        cv.pack(fill="both", expand=True)
+
+        c_white = self.C_WHITE
+        c_text = self.C_TEXT
+        c_light = self.C_TEXT_LIGHT
+        c_border = "#D7D0CB"
+        c_btn = self.C_CONFIRM
+
+        pad = 15
+        cx1, cy1 = pad, pad
+        cx2, cy2 = width - pad, height - pad
+        ip = 35
+        _round_rect(cv, cx1, cy1, cx2, cy2, radius=28, fill=c_white, outline="")
+
+        title_y = cy1 + 38
+        cv.create_text(cx1 + ip, title_y, text="Booking confirmed",
+                       anchor="w", fill=c_text,
+                       font=("Arial Rounded MT Bold", 18, "bold"))
+        div_y = title_y + 24
+        cv.create_line(cx1 + ip, div_y, cx2 - ip, div_y, fill="#DCD6D2", width=1)
+
+        badge_cx = width // 2
+        badge_y1 = div_y + 32
+        badge_y2 = badge_y1 + 68
+        _round_rect(cv, badge_cx - 92, badge_y1, badge_cx + 92, badge_y2,
+                    radius=34, fill="#D5F1EE", outline="")
+        cv.create_text(badge_cx, (badge_y1 + badge_y2) // 2,
+                       text=f"#{result['booking_id']}",
+                       fill=c_text,
+                       font=("Arial Rounded MT Bold", 24, "bold"))
+
+        info_y = badge_y2 + 34
+        row_h = 46
+        rows = [
+            ("Room", f"R-{result['room_id']:02d}"),
+            ("Type", result["room_type"]),
+        ]
+        for idx, (label, value) in enumerate(rows):
+            y1 = info_y + idx * (row_h + 10)
+            y2 = y1 + row_h
+            _round_rect(cv, cx1 + ip - 4, y1, cx2 - ip + 4, y2,
+                        radius=row_h // 2, fill=c_white, outline="")
+            _round_rect_outline(cv, cx1 + ip - 4, y1, cx2 - ip + 4, y2,
+                                radius=row_h // 2, color=c_border, lw=1)
+            cv.create_text(cx1 + ip + 18, (y1 + y2) // 2,
+                           text=label, anchor="w", fill=c_light,
+                           font=("Baghdad", 18, "bold"))
+            cv.create_text(cx2 - ip - 18, (y1 + y2) // 2,
+                           text=value, anchor="e", fill=c_text,
+                           font=("Baghdad", 18, "bold"))
+
+        btn_w = 180
+        btn_h = 44
+        btn_x1 = (width - btn_w) // 2
+        btn_y1 = cy2 - 68
+        btn_x2 = btn_x1 + btn_w
+        btn_y2 = btn_y1 + btn_h
+        _round_rect(cv, btn_x1, btn_y1, btn_x2, btn_y2,
+                    radius=btn_h // 2, fill=c_btn, outline="", tags="ok_btn")
+        cv.create_text(width // 2, (btn_y1 + btn_y2) // 2,
+                       text="Done", fill=c_white,
+                       font=("Arial Rounded MT Bold", 18, "bold"),
+                       tags="ok_btn")
+        cv.tag_bind("ok_btn", "<Button-1>", lambda _e: dialog.destroy())
+        cv.tag_bind("ok_btn", "<Enter>", lambda _e: cv.config(cursor="hand2"))
+        cv.tag_bind("ok_btn", "<Leave>", lambda _e: cv.config(cursor=""))
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        dialog.focus_set()
+
     def _on_confirm(self, _event=None):
         self._confirm_err.config(text="")
         try:
             result = self.backend.create_booking(self._collect_form_data())
-            messagebox.showinfo(
-                "Success",
-                (
-                    f"Booking #{result['booking_id']} confirmed.\n"
-                    f"Room: R-{result['room_id']:02d}\n"
-                    f"Type: {result['room_type']}"
-                ),
-                parent=self,
-            )
+            self._show_booking_success_popup(result)
         except Exception as exc:
             message = str(exc).strip() or "Thông tin không hợp lệ"
             self._confirm_err.config(text=f"⚠ {message}")

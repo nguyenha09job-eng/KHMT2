@@ -457,7 +457,7 @@ class CareViewDashboard(AppWindow):
         duck_tk = ImageTk.PhotoImage(result)
         self.images.append(duck_tk)
         duck_x = 125 - rabbit_w / 2
-        cv.create_image(duck_x, 550, image=duck_tk, anchor="nw")
+        cv.create_image(duck_x, 500, image=duck_tk, anchor="nw")
 
         # Logout
         base_bottom = self.H / self._s

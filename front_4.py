@@ -332,7 +332,7 @@ class BookingHistory(AppWindow):
         result.paste(img, (0, 0), mask=mask)
         icon_tk = ImageTk.PhotoImage(result)
         self.images.append(icon_tk)
-        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
+        cv.create_image(125 - 65, 500, image=icon_tk, anchor="nw")
 
 
         base_bottom = self.H / self._s
@@ -716,7 +716,7 @@ class BookingHistory(AppWindow):
                 booking_id, pet_id, service_type_id, unit_price,
                 quantity, total_price, service_date, status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, DATE(%s), 'pending')
+            VALUES (%s, %s, %s, %s, %s, %s, DATE(%s), 'not_done')
             """,
             (
                 booking_id,

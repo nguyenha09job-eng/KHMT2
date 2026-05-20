@@ -474,7 +474,7 @@ class PetDashboard(AppWindow):
         rabbit_tk = ImageTk.PhotoImage(result)
         self.images.append(rabbit_tk)
         rabbit_x = 125 - rabbit_w / 2
-        cv.create_image(rabbit_x, 550, image=rabbit_tk, anchor="nw")
+        cv.create_image(rabbit_x, 500, image=rabbit_tk, anchor="nw")
 
         # -- Logout button (fixed at sidebar bottom) --
         base_bottom = self.H / self._s

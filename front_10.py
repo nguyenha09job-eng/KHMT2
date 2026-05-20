@@ -672,7 +672,7 @@ class BillingDashboard(AppWindow):
         duck_tk = ImageTk.PhotoImage(result)
         self.images.append(duck_tk)
         duck_x = 125 - rabbit_w / 2
-        cv.create_image(duck_x, 550, image=duck_tk, anchor="nw")
+        cv.create_image(duck_x, 500, image=duck_tk, anchor="nw")
 
         # Logout
         base_bottom = self.H / self._s
@@ -845,9 +845,11 @@ class BillingDashboard(AppWindow):
 
             pet_text = f"{focus['species']} {focus['pet']}"
             pet_w = self._chip_width(pet_text, 95)
-            _round_rect(cv, L_PAD + 190, card_y1 + 16, L_PAD + 190 + pet_w, card_y1 + 41,
+            pet_chip_x = L_PAD + 25
+            pet_chip_y = card_y1 + 58
+            _round_rect(cv, pet_chip_x, pet_chip_y - 12, pet_chip_x + pet_w, pet_chip_y + 13,
                         radius=12, fill=self.C_UNPAID_BG)
-            cv.create_text(L_PAD + 190 + pet_w / 2, card_y1 + 28, text=pet_text,
+            cv.create_text(pet_chip_x + pet_w / 2, pet_chip_y, text=pet_text,
                            font=self.F_BOLD, fill=self.C_TEXT)
 
             self._draw_status_chip(cv, R_PAD - 25, card_y1 + 28, focus["status"])
@@ -858,11 +860,11 @@ class BillingDashboard(AppWindow):
                 f"{focus['customer']} - {focus['room']} - "
                 f"{focus['check_in']} -> {focus['check_out']}"
             )
-            cv.create_text(L_PAD + 25, card_y1 + 58, text=subtitle,
+            cv.create_text(pet_chip_x + pet_w + 16, pet_chip_y, text=subtitle,
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="w")
-            cv.create_line(L_PAD + 25, card_y1 + 78, R_PAD - 25, card_y1 + 78, fill=self.C_LINE)
+            cv.create_line(L_PAD + 25, card_y1 + 88, R_PAD - 25, card_y1 + 88, fill=self.C_LINE)
 
-            y_item = card_y1 + 105
+            y_item = card_y1 + 115
             room_label = f"Room ({focus['type_name']} x {focus['nights']} nights)"
             cv.create_text(L_PAD + 25, y_item, text=room_label,
                            font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")

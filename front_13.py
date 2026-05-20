@@ -52,6 +52,16 @@ class EmployeeDashboardBackend:
         prefix = f"{alias}." if alias else ""
         return f"({prefix}is_active = 1 OR {prefix}is_active = b'1')"
 
+    @staticmethod
+    def _month_bounds(month):
+        month = month or datetime.now()
+        start = month.replace(day=1)
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1)
+        else:
+            end = start.replace(month=start.month + 1)
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
     def _selected_employee_id(self):
         if self.employee_id:
             return self.employee_id
@@ -87,7 +97,8 @@ class EmployeeDashboardBackend:
             (employee_id,),
         )
 
-    def get_attendance_summary(self, employee_id):
+    def get_attendance_summary(self, employee_id, month=None):
+        month_start, month_end = self._month_bounds(month)
         row = self.db.fetch_one(
             """
             SELECT
@@ -95,26 +106,29 @@ class EmployeeDashboardBackend:
                 COALESCE(SUM(working_hours), 0) AS total_hours
             FROM attendance
             WHERE employee_id = %s
-              AND YEAR(work_date) = YEAR(CURDATE())
-              AND MONTH(work_date) = MONTH(CURDATE())
+              AND work_date >= %s
+              AND work_date < %s
             """,
-            (employee_id,),
+            (employee_id, month_start, month_end),
         ) or {}
         return {
             "working_days": int(row.get("working_days") or 0),
             "total_hours": self._number(row.get("total_hours")),
         }
 
-    def get_attendance_history(self, employee_id, limit=6):
+    def get_attendance_history(self, employee_id, limit=6, month=None):
+        month_start, month_end = self._month_bounds(month)
         rows = self.db.fetch_all(
             """
             SELECT work_date, check_in, check_out, working_hours, overtime_hours, penalty
             FROM attendance
             WHERE employee_id = %s
+              AND work_date >= %s
+              AND work_date < %s
             ORDER BY work_date DESC, attendance_id DESC
             LIMIT %s
             """,
-            (employee_id, limit),
+            (employee_id, month_start, month_end, limit),
         )
         return [
             (
@@ -128,14 +142,18 @@ class EmployeeDashboardBackend:
             for row in rows or []
         ]
 
-    def get_salary_values(self, employee_id):
+    def get_salary_values(self, employee_id, month=None):
+        month_start, month_end = self._month_bounds(month)
         periods = {
             "Day": "a.work_date = CURDATE()",
             "Week": "YEARWEEK(a.work_date, 1) = YEARWEEK(CURDATE(), 1)",
-            "Month": "YEAR(a.work_date) = YEAR(CURDATE()) AND MONTH(a.work_date) = MONTH(CURDATE())",
+            "Month": "a.work_date >= %s AND a.work_date < %s",
         }
         values = {}
         for label, where_clause in periods.items():
+            params = [employee_id]
+            if label == "Month":
+                params.extend([month_start, month_end])
             row = self.db.fetch_one(
                 f"""
                 SELECT COALESCE(SUM((COALESCE(a.working_hours, 0) + COALESCE(a.overtime_hours, 0))
@@ -144,7 +162,7 @@ class EmployeeDashboardBackend:
                 JOIN employees e ON e.employee_id = a.employee_id
                 WHERE a.employee_id = %s AND {where_clause}
                 """,
-                (employee_id,),
+                tuple(params),
             ) or {}
             values[label] = self._money(row.get("salary"))
         return values
@@ -165,8 +183,9 @@ class EmployeeDashboardBackend:
         )
         return row is not None
 
-    def get_data(self):
+    def get_data(self, month=None):
         try:
+            month = month or datetime.now()
             employee = self.get_employee()
             if not employee:
                 return self.fallback_data()
@@ -177,10 +196,10 @@ class EmployeeDashboardBackend:
                 "employee_id": employee_id,
                 "name": employee.get("full_name") or "-",
                 "emp": self._emp_code(employee_id),
-                "month_label": datetime.now().strftime("%m/%Y"),
-                "summary": self.get_attendance_summary(employee_id),
-                "attendance": self.get_attendance_history(employee_id),
-                "salary": self.get_salary_values(employee_id),
+                "month_label": month.strftime("%m/%Y"),
+                "summary": self.get_attendance_summary(employee_id, month=month),
+                "attendance": self.get_attendance_history(employee_id, month=month),
+                "salary": self.get_salary_values(employee_id, month=month),
                 "is_clocked_in": is_clocked_in,
             }
         except Exception as exc:
@@ -302,7 +321,8 @@ class StaffDashboard(AppWindow):
         # Salary tab state
         self._salary_tab = tk.StringVar(value="Week")
         self.backend = EmployeeDashboardBackend(employee_id=os.environ.get("PETBED_EMPLOYEE_ID"))
-        self.staff_data = self.backend.get_data()
+        self._selected_month = datetime.now().replace(day=1)
+        self.staff_data = self.backend.get_data(self._selected_month)
         self._salary_values = self.staff_data["salary"]
 
         self.images = []
@@ -475,26 +495,36 @@ class StaffDashboard(AppWindow):
 
         # ── EMPLOYEE NAME + ID + MONTH SELECTOR ──
         name_y = 120 + y
-        cv.create_text(300 + dx, name_y + 12, text=self.staff_data["name"],
-                       font=self.F_EMP_NAME, fill=self.C_TEXT, anchor="w")
-        cv.create_text(300 + dx, name_y + int(36 * s), text=self.staff_data["emp"],
+        cv.create_text(300 + dx, name_y - 2, text=self.staff_data["name"],
+                       font=self.F_EMP_NAME, fill=self.C_TEXT, anchor="w",
+                       width=360)
+        emp_y = name_y + int(36 * s)
+        cv.create_text(300 + dx, emp_y, text=self.staff_data["emp"],
                        font=self.F_EMP_ID, fill=self.C_TEXT_LIGHT, anchor="w")
 
-        # Month selector pill
-        ms_x1, ms_y1 = 480 + dx, name_y - 4
-        ms_x2, ms_y2 = 670 + dx, name_y + 38
+        # Month selector pill, kept compact beside the employee id.
+        ms_x1, ms_y1 = 410 + dx, emp_y - 28
+        ms_x2, ms_y2 = 548 + dx, emp_y + 8
         ms_r = (ms_y2 - ms_y1) // 2
-        _round_rect(cv, ms_x1, ms_y1, ms_x2, ms_y2, radius=ms_r, fill=self.C_WHITE)
-        cv.create_text(ms_x1 + 20, (ms_y1 + ms_y2) // 2,
+        _round_rect(cv, ms_x1, ms_y1, ms_x2, ms_y2, radius=ms_r,
+                    fill=self.C_WHITE, tags="month_filter")
+        cv.create_text(ms_x1 + 18, (ms_y1 + ms_y2) // 2,
                        text=self.staff_data["month_label"], font=self.F_MONTH_SEL,
-                       fill=self.C_TEXT, anchor="w")
+                       fill=self.C_TEXT, anchor="w", tags="month_filter")
         # Dropdown arrow
-        arr_x = ms_x2 - 22
+        arr_x = ms_x2 - 20
         arr_y = (ms_y1 + ms_y2) // 2
-        cv.create_polygon(arr_x - 7, arr_y - 4,
-                          arr_x + 7, arr_y - 4,
+        cv.create_polygon(arr_x - 6, arr_y - 3,
+                          arr_x + 6, arr_y - 3,
                           arr_x,     arr_y + 5,
-                          fill=self.C_TEXT)
+                          fill=self.C_TEXT, tags="month_filter")
+        cv.tag_bind("month_filter", "<Button-1>",
+                    lambda _e, x=ms_x1, y=ms_y2: self._open_month_filter(
+                        self.canvas.winfo_rootx() + int(x * self._s),
+                        self.canvas.winfo_rooty() + int(y * self._s),
+                    ))
+        cv.tag_bind("month_filter", "<Enter>", lambda _e: cv.config(cursor="hand2"))
+        cv.tag_bind("month_filter", "<Leave>", lambda _e: cv.config(cursor=""))
 
         # ── STAT CARDS + PHOTO ──
         card_y1 = name_y + int(50 * s)
@@ -619,8 +649,9 @@ class StaffDashboard(AppWindow):
         self._sal_base_x  = 320 + dx
 
     def _refresh_content(self):
-        self.staff_data = self.backend.get_data()
+        self.staff_data = self.backend.get_data(self._selected_month)
         self._salary_values = self.staff_data["salary"]
+        self.images = self.images[:1]
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -628,6 +659,44 @@ class StaffDashboard(AppWindow):
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+    def _month_options(self, count=12):
+        current = datetime.now().replace(day=1)
+        options = []
+        year, month = current.year, current.month
+        for _ in range(count):
+            options.append(datetime(year, month, 1))
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        return options
+
+    def _set_month_filter(self, month):
+        self._selected_month = month.replace(day=1)
+        self._refresh_content()
+
+    def _open_month_filter(self, x, y):
+        menu = tk.Toplevel(self)
+        menu.overrideredirect(True)
+        menu.configure(bg="#C8C2BC")
+        menu.geometry(f"150x{len(self._month_options()) * 34 + 2}+{x}+{y}")
+
+        frame = tk.Frame(menu, bg=self.C_WHITE)
+        frame.pack(fill="both", expand=True, padx=1, pady=1)
+
+        for month in self._month_options():
+            label = month.strftime("%m/%Y")
+            active = label == self.staff_data.get("month_label")
+            bg = "#D4EDBA" if active else self.C_WHITE
+            fg = "#5A8A1A" if active else self.C_TEXT
+            item = tk.Label(frame, text=label, font=self.F_MONTH_SEL,
+                            bg=bg, fg=fg, anchor="w", padx=14, pady=4)
+            item.pack(fill="x")
+            item.bind("<Button-1>", lambda _e, m=month: (menu.destroy(), self._set_month_filter(m)))
+
+        menu.bind("<Escape>", lambda _e: menu.destroy())
+        menu.focus_force()
 
     def _clock_in_or_out(self, event=None):
         try:

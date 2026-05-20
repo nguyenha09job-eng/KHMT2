@@ -175,6 +175,7 @@ class RoomsDashboard(AppWindow):
         self.images = []
         self.search_text = ""
         self._search_entry = None
+        self._search_after_id = None
         self.current_filter = "all"  # "all", "dog", or "cat"
         self.status_filter = "all"   # "all", "Occupied", "Available", or "Cleaning"
         self.backend = RoomsBackend()
@@ -242,13 +243,7 @@ class RoomsDashboard(AppWindow):
             self.current_filter = "all"
         else:
             self.current_filter = new_filter
-        self.canvas.delete("all")
-        self.draw_content()
-        self.canvas.scale("all", 0, 0, self._s, self._s)
-        self.canvas.update_idletasks()
-        bbox = self.canvas.bbox("all")
-        if bbox:
-            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+        self._redraw_content()
 
 
     def set_status_filter(self, new_filter):
@@ -257,6 +252,16 @@ class RoomsDashboard(AppWindow):
             self.status_filter = "all"
         else:
             self.status_filter = new_filter
+        self._redraw_content()
+
+    def _redraw_content(self):
+        curr_pos = tk.END
+        if self._search_entry:
+            try:
+                curr_pos = self._search_entry.index(tk.INSERT)
+            except Exception:
+                pass
+        self.images = self.images[:1]
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -264,6 +269,12 @@ class RoomsDashboard(AppWindow):
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+        if self._search_entry:
+            try:
+                self._search_entry.focus_set()
+                self._search_entry.icursor(curr_pos)
+            except Exception:
+                pass
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -304,7 +315,7 @@ class RoomsDashboard(AppWindow):
         result.paste(img, (0, 0), mask=mask)
         icon_tk = ImageTk.PhotoImage(result)
         self.images.append(icon_tk)
-        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
+        cv.create_image(125 - 65, 500, image=icon_tk, anchor="nw")
 
         base_bottom = self.H / self._s
         btn_h, btn_pad = 42, 25
@@ -569,6 +580,8 @@ class RoomsDashboard(AppWindow):
                 self._search_entry.delete(0, tk.END)
                 self._search_entry.insert(0, "Search room_id")
                 self._search_entry.config(fg="#B5B0AA")
+                self.search_text = ""
+                self._redraw_content()
                 self.canvas.focus_set()
             return
 
@@ -578,13 +591,13 @@ class RoomsDashboard(AppWindow):
 
         if text.strip().lower() != self.search_text.lower():
             self.search_text = text.strip()
-            self.canvas.delete("all")
-            self.draw_content()
-            self.canvas.scale("all", 0, 0, self._s, self._s)
-            self.canvas.update_idletasks()
-            bbox = self.canvas.bbox("all")
-            if bbox:
-                self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+            if self._search_after_id is not None:
+                self.after_cancel(self._search_after_id)
+            self._search_after_id = self.after(220, self._apply_search)
+
+    def _apply_search(self):
+        self._search_after_id = None
+        self._redraw_content()
 
     def _on_search_focusin(self, event):
         """Clear placeholder on focus."""

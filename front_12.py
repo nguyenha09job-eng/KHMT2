@@ -176,6 +176,7 @@ class NewStaffPopup(AppWindow):
         _round_rect_outline(cv, box1_x1, box1_y1, box1_x2, box1_y2,
                             radius=22, color=C_BORDER, lw=1)
 
+        self.phone_placeholder = "ex: 012345678"
         self.phone_entry = tk.Entry(
             self, bd=0, relief="flat",
             bg=C_WHITE, fg=C_PLACE,
@@ -183,7 +184,9 @@ class NewStaffPopup(AppWindow):
             insertbackground=C_TEXT,
             highlightthickness=0
         )
-        self.phone_entry.insert(0, "ex: 012345678")
+        self.phone_entry.insert(0, self.phone_placeholder)
+        self.phone_entry.bind("<FocusIn>", lambda e: self._on_focus_in(self.phone_entry, self.phone_placeholder, C_TEXT))
+        self.phone_entry.bind("<FocusOut>", lambda e: self._on_focus_out(self.phone_entry, self.phone_placeholder, C_PLACE))
         self.phone_entry.place(
             x=box1_x1 + 20,
             y=(box1_y1 + box1_y2) // 2 - 12,
@@ -209,6 +212,7 @@ class NewStaffPopup(AppWindow):
         _round_rect_outline(cv, box2_x1, box2_y1, box2_x2, box2_y2,
                             radius=22, color=C_BORDER, lw=1)
 
+        self.name_placeholder = "ex: Thuy Hang"
         self.name_entry = tk.Entry(
             self, bd=0, relief="flat",
             bg=C_WHITE, fg=C_PLACE,
@@ -216,7 +220,9 @@ class NewStaffPopup(AppWindow):
             insertbackground=C_TEXT,
             highlightthickness=0
         )
-        self.name_entry.insert(0, "ex: Thuy Hang")
+        self.name_entry.insert(0, self.name_placeholder)
+        self.name_entry.bind("<FocusIn>", lambda e: self._on_focus_in(self.name_entry, self.name_placeholder, C_TEXT))
+        self.name_entry.bind("<FocusOut>", lambda e: self._on_focus_out(self.name_entry, self.name_placeholder, C_PLACE))
         self.name_entry.place(
             x=box2_x1 + 20,
             y=(box2_y1 + box2_y2) // 2 - 12,
@@ -244,6 +250,18 @@ class NewStaffPopup(AppWindow):
 
         cv.tag_bind("add_btn", "<Button-1>", self.add_staff)
         self.bind("<Escape>", lambda e: self.destroy())
+
+    @staticmethod
+    def _on_focus_in(entry, placeholder, text_color):
+        if entry.get().strip().lower() == placeholder.lower():
+            entry.delete(0, "end")
+            entry.config(fg=text_color)
+
+    @staticmethod
+    def _on_focus_out(entry, placeholder, placeholder_color):
+        if not entry.get().strip():
+            entry.insert(0, placeholder)
+            entry.config(fg=placeholder_color)
 
     # =========================
     def add_staff(self, event=None):

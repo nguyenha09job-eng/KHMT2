@@ -54,7 +54,18 @@ class StaffBackend:
     def _active_where(self):
         return "(is_active = 1 OR is_active = b'1')"
 
-    def get_employees(self, limit=5):
+    @staticmethod
+    def _month_bounds(month):
+        month = month or datetime.now()
+        start = month.replace(day=1)
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1)
+        else:
+            end = start.replace(month=start.month + 1)
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+    def get_employees(self, limit=5, month=None):
+        month_start, month_end = self._month_bounds(month)
         rows = self.db.fetch_all(
             f"""
             SELECT
@@ -64,8 +75,7 @@ class StaffBackend:
                 e.phone,
                 e.base_salary_per_hour,
                 COALESCE(SUM(CASE
-                    WHEN YEAR(a.work_date) = YEAR(CURDATE())
-                     AND MONTH(a.work_date) = MONTH(CURDATE())
+                    WHEN a.work_date >= %s AND a.work_date < %s
                     THEN a.penalty ELSE 0 END), 0) AS month_penalty
             FROM employees e
             LEFT JOIN attendance a ON a.employee_id = e.employee_id
@@ -81,7 +91,7 @@ class StaffBackend:
                 e.employee_id
             LIMIT %s
             """,
-            (limit,),
+            (month_start, month_end, limit),
         )
         staff = []
         for row in rows or []:
@@ -99,7 +109,8 @@ class StaffBackend:
             })
         return staff
 
-    def get_summary(self):
+    def get_summary(self, month=None):
+        month_start, month_end = self._month_bounds(month)
         row = self.db.fetch_one(
             f"""
             SELECT
@@ -126,10 +137,12 @@ class StaffBackend:
                     * e.base_salary_per_hour - COALESCE(a.penalty, 0)), 0) AS salary_total
             FROM attendance a
             JOIN employees e ON e.employee_id = a.employee_id
-            WHERE YEAR(a.work_date) = YEAR(CURDATE())
-              AND MONTH(a.work_date) = MONTH(CURDATE())
+            WHERE a.work_date >= %s
+              AND a.work_date < %s
               AND {self._active_where().replace('is_active', 'e.is_active')}
             """
+            ,
+            (month_start, month_end),
         ) or {}
 
         total = int(row.get("total_employees") or 0)
@@ -144,6 +157,10 @@ class StaffBackend:
         return {
             "total": total,
             "role_sub": f"{parttime} partime - {fulltime} fulltime - {managers} manager",
+            "role_sub_lines": [
+                f"{parttime} partime - {fulltime} fulltime",
+                f"{managers} manager",
+            ],
             "present_today": int(present.get("present_today") or 0),
             "expected_today": expected_today,
             "salary_big": salary_big,
@@ -196,14 +213,18 @@ class StaffBackend:
             "salary": salary,
         }
 
-    def get_salary_breakdown(self, employee_id):
+    def get_salary_breakdown(self, employee_id, month=None):
+        month_start, month_end = self._month_bounds(month)
         periods = {
             "Day": "a.work_date = CURDATE()",
             "Week": "YEARWEEK(a.work_date, 1) = YEARWEEK(CURDATE(), 1)",
-            "Month": "YEAR(a.work_date) = YEAR(CURDATE()) AND MONTH(a.work_date) = MONTH(CURDATE())",
+            "Month": "a.work_date >= %s AND a.work_date < %s",
         }
         result = {}
         for label, where_clause in periods.items():
+            params = [employee_id]
+            if label == "Month":
+                params.extend([month_start, month_end])
             row = self.db.fetch_one(
                 f"""
                 SELECT COALESCE(SUM((a.working_hours + COALESCE(a.overtime_hours, 0))
@@ -212,19 +233,20 @@ class StaffBackend:
                 JOIN employees e ON e.employee_id = a.employee_id
                 WHERE a.employee_id = %s AND {where_clause}
                 """,
-                (employee_id,),
+                tuple(params),
             ) or {}
             result[label] = self._money(row.get("salary"))
         return result
 
-    def get_data(self):
+    def get_data(self, month=None):
         try:
-            employees = self.get_employees()
+            month = month or datetime.now()
+            employees = self.get_employees(month=month)
             return {
-                "summary": self.get_summary(),
+                "summary": self.get_summary(month=month),
                 "staff_list": employees,
                 "focus_attendance": self.get_focus_attendance(),
-                "month_label": datetime.now().strftime("%m/%Y"),
+                "month_label": month.strftime("%m/%Y"),
                 "manager_name": next(
                     (item["name"] for item in employees
                      if str(item.get("role") or "").lower() == "manager"),
@@ -240,6 +262,7 @@ class StaffBackend:
             "summary": {
                 "total": 0,
                 "role_sub": "0 partime - 0 fulltime - 0 manager",
+                "role_sub_lines": ["0 partime - 0 fulltime", "0 manager"],
                 "present_today": 0,
                 "expected_today": 0,
                 "salary_big": "0",
@@ -273,16 +296,16 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     return tuple(items)
 
 
-def _round_rect_outline(cv, x1, y1, x2, y2, radius=20, color="#D7D0CB", lw=1):
+def _round_rect_outline(cv, x1, y1, x2, y2, radius=20, color="#D7D0CB", lw=1, tags=None):
     d = 2 * radius
-    cv.create_arc(x1,   y1,   x1+d, y1+d, start=90,  extent=90,  style=tk.ARC, outline=color, width=lw)
-    cv.create_arc(x2-d, y1,   x2,   y1+d, start=0,   extent=90,  style=tk.ARC, outline=color, width=lw)
-    cv.create_arc(x2-d, y2-d, x2,   y2,   start=270, extent=90,  style=tk.ARC, outline=color, width=lw)
-    cv.create_arc(x1,   y2-d, x1+d, y2,   start=180, extent=90,  style=tk.ARC, outline=color, width=lw)
-    cv.create_line(x1+radius, y1,   x2-radius, y1,   fill=color, width=lw)
-    cv.create_line(x2,        y1+radius, x2,   y2-radius, fill=color, width=lw)
-    cv.create_line(x1+radius, y2,   x2-radius, y2,   fill=color, width=lw)
-    cv.create_line(x1,        y1+radius, x1,   y2-radius, fill=color, width=lw)
+    cv.create_arc(x1,   y1,   x1+d, y1+d, start=90,  extent=90,  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x2-d, y1,   x2,   y1+d, start=0,   extent=90,  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x2-d, y2-d, x2,   y2,   start=270, extent=90,  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_arc(x1,   y2-d, x1+d, y2,   start=180, extent=90,  style=tk.ARC, outline=color, width=lw, tags=tags)
+    cv.create_line(x1+radius, y1,   x2-radius, y1,   fill=color, width=lw, tags=tags)
+    cv.create_line(x2,        y1+radius, x2,   y2-radius, fill=color, width=lw, tags=tags)
+    cv.create_line(x1+radius, y2,   x2-radius, y2,   fill=color, width=lw, tags=tags)
+    cv.create_line(x1,        y1+radius, x1,   y2-radius, fill=color, width=lw, tags=tags)
 
 
 class PenaltyPopup(tk.Toplevel):
@@ -492,6 +515,7 @@ class StaffPage(AppWindow):
         self.F_CARD_NUM     = ("Arial Rounded MT Bold", max(28, int(85 * s)), "bold")
         self.F_CARD_NUM_MED = ("Arial Rounded MT Bold", max(22, int(70 * s)), "bold")
         self.F_CARD_SUB     = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
+        self.F_CARD_SUB_SM  = ("Baghdad", max(9, int(14 * s)))
         self.F_STAFF_NAME   = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
         self.F_STAFF_INFO   = ("Baghdad", max(10, int(18 * s)))            # = F_NAV
         self.F_CHIP         = ("Baghdad", max(10, int(18 * s)), "bold")   # = F_NAV
@@ -506,7 +530,9 @@ class StaffPage(AppWindow):
 
         self.images = []
         self.backend = StaffBackend()
-        self.staff_data = self.backend.get_data()
+        self._selected_month = datetime.now().replace(day=1)
+        self.staff_data = self.backend.get_data(self._selected_month)
+        self._salary_filter = tk.StringVar(value="Week")
 
         # ── Layout ──────────────────────────────────────────
         main = tk.Frame(self, bg=self.C_BG)
@@ -593,7 +619,7 @@ class StaffPage(AppWindow):
         result.paste(img, (0, 0), mask=mask)
         icon_tk = ImageTk.PhotoImage(result)
         self.images.append(icon_tk)
-        cv.create_image(125 - 65, 550, image=icon_tk, anchor="nw")
+        cv.create_image(125 - 65, 500, image=icon_tk, anchor="nw")
 
         base_bottom = self.H / self._s
         btn_h, btn_pad = 42, 25
@@ -660,7 +686,8 @@ class StaffPage(AppWindow):
         PenaltyPopup(self, employee_id, emp_name, self.backend.db, self.refresh_ui)
 
     def refresh_ui(self):
-        self.staff_data = self.backend.get_data()
+        self.staff_data = self.backend.get_data(self._selected_month)
+        self.images = self.images[:1]
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -668,6 +695,102 @@ class StaffPage(AppWindow):
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * self._s)))
+
+    def _month_options(self, count=12):
+        current = datetime.now().replace(day=1)
+        options = []
+        year, month = current.year, current.month
+        for _ in range(count):
+            options.append(datetime(year, month, 1))
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        return options
+
+    def _set_month_filter(self, month):
+        self._selected_month = month.replace(day=1)
+        self.staff_data = self.backend.get_data(self._selected_month)
+        self.images = self.images[:1]
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * self._s)))
+
+    def _open_month_filter(self, x, y):
+        menu = tk.Toplevel(self)
+        menu.overrideredirect(True)
+        menu.configure(bg=self.C_BORDER)
+        menu.geometry(f"180x{len(self._month_options()) * 34 + 2}+{x}+{y}")
+
+        frame = tk.Frame(menu, bg=self.C_WHITE)
+        frame.pack(fill="both", expand=True, padx=1, pady=1)
+
+        for month in self._month_options():
+            label = month.strftime("%m/%Y")
+            active = label == self.staff_data.get("month_label")
+            bg = self.C_GREEN_BG if active else self.C_WHITE
+            fg = self.C_GREEN_FG if active else self.C_TEXT
+            item = tk.Label(frame, text=label, font=self.F_DROPDOWN,
+                            bg=bg, fg=fg, anchor="w", padx=16, pady=4)
+            item.pack(fill="x")
+            item.bind("<Button-1>", lambda _e, m=month: (menu.destroy(), self._set_month_filter(m)))
+
+        menu.bind("<Escape>", lambda _e: menu.destroy())
+        menu.focus_force()
+
+    def _set_salary_filter(self, period):
+        self._salary_filter.set(period)
+        self.images = self.images[:1]
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * self._s)))
+
+    def _draw_salary_filter(self, cv, start_x, label_y, chip_y, salary_values):
+        """Draw salary amount on label_y row, Day/Week/Month chips on chip_y row."""
+        active_period = self._salary_filter.get()
+
+        # Salary amount on the label row (right-aligned)
+        cv.create_text(self._salary_amount_x, label_y,
+                       text=salary_values.get(active_period, "0đ"),
+                       font=self.F_SALARY_NUM, fill=self.C_TEXT,
+                       anchor="e", tags="salary_filter")
+
+        # Day / Week / Month chips on the next row
+        labels = ["Day", "Week", "Month"]
+        x = start_x
+        for label in labels:
+            tag = f"salary_filter_{label.lower()}"
+            active = label == active_period
+            chip_w = max(58, len(label) * 13 + 30)
+            chip_h = 30
+            x1 = x
+            y1 = chip_y - chip_h // 2
+            x2 = x1 + chip_w
+            y2 = chip_y + chip_h // 2
+            fill = self.C_GREEN_BG if active else self.C_WHITE
+            fg = self.C_GREEN_FG if active else self.C_TEXT
+            border = self.C_GREEN_BG if active else self.C_BORDER
+
+            _round_rect(cv, x1, y1, x2, y2, radius=chip_h // 2,
+                        fill=fill, tags=("salary_filter", tag))
+            if not active:
+                _round_rect_outline(cv, x1, y1, x2, y2, radius=chip_h // 2,
+                                    color=border, lw=1, tags=("salary_filter", tag))
+            cv.create_text((x1 + x2) // 2, chip_y, text=label,
+                           font=self.F_TOGGLE, fill=fg,
+                           tags=("salary_filter", tag))
+            cv.tag_bind(tag, "<Button-1>", lambda _e, value=label: self._set_salary_filter(value))
+            cv.tag_bind(tag, "<Enter>", lambda _e: cv.config(cursor="hand2"))
+            cv.tag_bind(tag, "<Leave>", lambda _e: cv.config(cursor=""))
+            x = x2 + 8
 
     # ─────────────────── MAIN CONTENT ──────────────────────
     def draw_content(self):
@@ -726,15 +849,24 @@ class StaffPage(AppWindow):
         dd_y1 = title_y + 28
         dd_x2 = hbar_x1 + 260
         dd_y2 = dd_y1 + 40
-        _round_rect(cv, dd_x1, dd_y1, dd_x2, dd_y2, radius=20, fill=self.C_WHITE, outline="")
+        _round_rect(cv, dd_x1, dd_y1, dd_x2, dd_y2, radius=20,
+                    fill=self.C_WHITE, outline="", tags="month_filter")
 
         cv.create_text(dd_x1 + 16, (dd_y1 + dd_y2) // 2,
-                       text=self.staff_data["month_label"], font=self.F_DROPDOWN, fill=self.C_TEXT, anchor="w")
+                       text=self.staff_data["month_label"], font=self.F_DROPDOWN,
+                       fill=self.C_TEXT, anchor="w", tags="month_filter")
         # Arrow triangle
         ax = dd_x2 - 18
         ay = (dd_y1 + dd_y2) // 2
         cv.create_polygon(ax - 8, ay - 4, ax + 8, ay - 4, ax, ay + 6,
-                          fill=self.C_TEXT_LIGHT, outline="")
+                          fill=self.C_TEXT_LIGHT, outline="", tags="month_filter")
+        cv.tag_bind("month_filter", "<Button-1>",
+                    lambda _e, x=dd_x1, y=dd_y2: self._open_month_filter(
+                        self.canvas.winfo_rootx() + int(x * self._s),
+                        self.canvas.winfo_rooty() + int(y * self._s),
+                    ))
+        cv.tag_bind("month_filter", "<Enter>", lambda _e: cv.config(cursor="hand2"))
+        cv.tag_bind("month_filter", "<Leave>", lambda _e: cv.config(cursor=""))
 
         # ══════════════════════════════════════════════════
         # 4.  TOP ROW:  "Total Employees" card  +  Cat image
@@ -750,8 +882,14 @@ class StaffPage(AppWindow):
                        text="Total Employees", font=self.F_CARD_LABEL, fill=self.C_TEXT)
         cv.create_text(card_cx, row1_y1 + 75,
                        text=str(self.staff_data["summary"]["total"]), font=self.F_CARD_NUM, fill=self.C_TEXT)
-        cv.create_text(card_cx, row1_y2 - 22,
-                       text=self.staff_data["summary"]["role_sub"], font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
+        role_lines = self.staff_data["summary"].get("role_sub_lines")
+        if not role_lines:
+            role_lines = [self.staff_data["summary"].get("role_sub", "")]
+        role_y = row1_y2 - 38
+        for idx, line in enumerate(role_lines[:2]):
+            cv.create_text(card_cx, role_y + idx * 18,
+                           text=line, font=self.F_CARD_SUB_SM,
+                           fill=self.C_TEXT_LIGHT, width=230)
 
         # --- Cat (manage.jpg) rounded image ---
         _dir = os.path.dirname(__file__)
@@ -954,41 +1092,12 @@ class StaffPage(AppWindow):
         cv.create_text(right_x1 + 22, sal_label_y,
                        text="Estimate salary", font=self.F_STAFF_NAME, fill=self.C_TEXT, anchor="w")
 
-        # Day / Week (active green) / Month toggle chips
-        toggle_cx = right_x1 + 195
-        for t_idx, t_label in enumerate(["Day", "Week", "Month"]):
-            if t_label == "Week":
-                self._draw_chip(cv, toggle_cx + t_idx * 65, sal_label_y,
-                                t_label, self.C_GREEN_BG, self.C_GREEN_FG, self.F_TOGGLE)
-            else:
-                # bordered chip
-                tw2 = len(t_label) * 9 + 22
-                th2 = 24
-                tcx = toggle_cx + t_idx * 65
-                x1c, y1c = tcx - tw2 // 2, sal_label_y - th2 // 2
-                x2c, y2c = tcx + tw2 // 2, sal_label_y + th2 // 2
-                r2 = th2 // 2
-                # White fill
-                _round_rect(cv, x1c, y1c, x2c, y2c, radius=r2, fill=self.C_WHITE)
-                # Draw border arcs
-                d2 = r2 * 2
-                cv.create_arc(x1c, y1c, x1c + d2, y1c + d2, start=90, extent=90,
-                              style='arc', outline=self.C_BORDER, width=1)
-                cv.create_arc(x2c - d2, y1c, x2c, y1c + d2, start=0, extent=90,
-                              style='arc', outline=self.C_BORDER, width=1)
-                cv.create_arc(x2c - d2, y2c - d2, x2c, y2c, start=270, extent=90,
-                              style='arc', outline=self.C_BORDER, width=1)
-                cv.create_arc(x1c, y2c - d2, x1c + d2, y2c, start=180, extent=90,
-                              style='arc', outline=self.C_BORDER, width=1)
-                cv.create_line(x1c + r2, y1c, x2c - r2, y1c, fill=self.C_BORDER)
-                cv.create_line(x1c + r2, y2c, x2c - r2, y2c, fill=self.C_BORDER)
-                cv.create_text(tcx, sal_label_y, text=t_label,
-                               font=self.F_TOGGLE, fill=self.C_TEXT)
-
-        # Salary amount
-        sal_amt_y = sal_label_y + 32
-        cv.create_text(right_x2 - 22, sal_amt_y,
-                       text=focus_att["salary"]["Week"], font=self.F_SALARY_NUM, fill=self.C_TEXT, anchor="e")
+        # Day/Week/Month chips row + Salary amount row below
+        sal_chip_y = sal_label_y + 24
+        sal_amt_y = sal_chip_y + 34
+        self._salary_amount_x = right_x2 - 22
+        self._salary_amount_y = sal_amt_y
+        self._draw_salary_filter(cv, right_x1 + 22, sal_amt_y, sal_chip_y, focus_att["salary"])
 
 
 if __name__ == "__main__":

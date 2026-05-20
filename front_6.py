@@ -148,6 +148,7 @@ class CustomerPetDashboard(AppWindow):
         self.search_var.trace_add("write", self._on_search_change)
         self._search_updating = False
         self._search_entry = None
+        self._search_after_id = None
 
         # ── Layout ──
         main = tk.Frame(self, bg=self.C_BG)
@@ -205,9 +206,16 @@ class CustomerPetDashboard(AppWindow):
             return []
 
     def _on_search_change(self, *args):
-        """Filter table data on search text change and redraw."""
+        """Debounce search so typing does not rebuild the canvas on every key."""
         if self._search_updating:
             return
+        if self._search_after_id is not None:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(220, self._apply_search_change)
+
+    def _apply_search_change(self):
+        """Filter table data after the user pauses typing."""
+        self._search_after_id = None
         self._search_updating = True
         query = self.search_var.get().strip().lower()
         if not query:
@@ -232,6 +240,8 @@ class CustomerPetDashboard(AppWindow):
             except Exception:
                 pass
 
+        # Keep sidebar image, drop old banner refs before redrawing content.
+        self.images = self.images[:1]
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -301,7 +311,7 @@ class CustomerPetDashboard(AppWindow):
         rabbit_tk = ImageTk.PhotoImage(result)
         self.images.append(rabbit_tk)
         rabbit_x = 125 - rabbit_w / 2
-        cv.create_image(rabbit_x, 550, image=rabbit_tk, anchor="nw")
+        cv.create_image(rabbit_x, 500, image=rabbit_tk, anchor="nw")
 
         base_bottom = self.H / self._s
         btn_h, btn_pad = 42, 25
@@ -403,22 +413,17 @@ class CustomerPetDashboard(AppWindow):
         entry_w = 760
         entry_h = s_y2 - s_y1 - 12
 
-        if self._search_entry is not None:
-            try:
-                self._search_entry.destroy()
-            except Exception:
-                pass
-
-        self._search_entry = tk.Entry(
-            self.canvas,
-            textvariable=self.search_var,
-            font=self.F_SEARCH,
-            bg=self.C_WHITE,
-            fg=self.C_TEXT,
-            bd=0,
-            highlightthickness=0,
-            insertbackground=self.C_TEXT,
-        )
+        if self._search_entry is None:
+            self._search_entry = tk.Entry(
+                self.canvas,
+                textvariable=self.search_var,
+                font=self.F_SEARCH,
+                bg=self.C_WHITE,
+                fg=self.C_TEXT,
+                bd=0,
+                highlightthickness=0,
+                insertbackground=self.C_TEXT,
+            )
 
         cv.create_window(
             entry_x + entry_w // 2,
