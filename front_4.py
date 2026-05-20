@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login, switch_to
 
@@ -148,7 +149,7 @@ class BookingHistoryBackend:
                 "status": self.STATUS_LABELS.get(row.get("status_name"), self._title(row.get("status_name"))),
             })
         return data
-class BookingHistory(tk.Tk):
+class BookingHistory(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Booking History")
@@ -878,4 +879,3 @@ class BookingHistory(tk.Tk):
 if __name__ == "__main__":
     app = BookingHistory()
     app.mainloop()
-

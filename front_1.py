@@ -5,6 +5,7 @@ import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login, switch_to
 
@@ -284,7 +285,7 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     items.append(cv.create_arc(x1, y2 - d, x1 + d, y2, start=180, extent=90, style='pieslice', **kwargs))
     return tuple(items)
 
-class PetDashboard(tk.Tk):
+class PetDashboard(AppWindow):
     def __init__(self):
         super().__init__()
 

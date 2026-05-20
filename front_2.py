@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login
 
@@ -124,7 +125,7 @@ class CareViewBackend:
         )
 
 
-class CareViewDashboard(tk.Tk):
+class CareViewDashboard(AppWindow):
     def __init__(self):
         super().__init__()
 

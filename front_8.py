@@ -5,6 +5,7 @@ import sys
 from datetime import date
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -194,7 +195,7 @@ class CustomerProfileBackend:
         }
 
 
-class CustomerProfilePopup(tk.Tk):
+class CustomerProfilePopup(AppWindow):
     def __init__(self, customer_id=None):
         super().__init__()
         self.title("Customer Profile Pop-up")

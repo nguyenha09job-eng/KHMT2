@@ -6,6 +6,7 @@ import sys
 from datetime import datetime, date
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login
 
@@ -346,7 +347,7 @@ def _round_rect_outline(cv, x1, y1, x2, y2, radius=25, color="#000", width=1, ta
     cv.create_line(x1, y1+radius, x1, y2-radius, fill=color, width=width, tags=tags)
 
 
-class BillingDashboard(tk.Tk):
+class BillingDashboard(AppWindow):
     def __init__(self):
         super().__init__()
 

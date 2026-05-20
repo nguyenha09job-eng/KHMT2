@@ -3,6 +3,7 @@ from tkinter import messagebox
 
 from PIL import Image, ImageTk, ImageDraw
 
+from app_window import AppWindow
 from database import DatabaseConnection
 
 
@@ -96,7 +97,7 @@ def _round_rect_outline(cv, x1, y1, x2, y2, radius=20, color="#D7D0CB", lw=1):
 # =========================
 # APP
 # =========================
-class NewStaffPopup(tk.Tk):
+class NewStaffPopup(AppWindow):
 
     def __init__(self):
         super().__init__()

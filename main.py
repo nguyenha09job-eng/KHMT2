@@ -1,27 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import importlib
-
-from navigation import PAGE_SPECS, resolve_page
+from app_window import get_app_root
+from navigation import create_page
 
 
 def run_page(page_name: str, args: argparse.Namespace) -> None:
-    page_name = resolve_page(page_name)
-    spec = PAGE_SPECS[page_name]
-    module = importlib.import_module(spec.module)
-    page_class = getattr(module, spec.class_name)
-
-    if page_name == "Login":
-        page_class().run()
-        return
-    if page_name == "Pet Details":
-        app = page_class(pet_id=args.pet_id)
-    elif page_name == "Customer Profile":
-        app = page_class(customer_id=args.customer_id)
-    else:
-        app = page_class()
-    app.mainloop()
+    extra_args = []
+    if args.pet_id is not None:
+        extra_args.extend(["--pet-id", str(args.pet_id)])
+    if args.customer_id is not None:
+        extra_args.extend(["--customer-id", str(args.customer_id)])
+    create_page(page_name, *extra_args)
+    get_app_root().mainloop()
 
 
 def parse_args() -> argparse.Namespace:

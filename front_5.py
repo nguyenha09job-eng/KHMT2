@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login
 
@@ -121,7 +122,7 @@ class RoomsBackend:
         return {"summary": summary, "rooms": data}
 
 
-class RoomsDashboard(tk.Tk):
+class RoomsDashboard(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Rooms")

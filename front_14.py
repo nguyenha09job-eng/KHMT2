@@ -6,6 +6,7 @@ import math
 from datetime import datetime
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login
 
@@ -627,7 +628,7 @@ def _round_rect_outline(cv, x1, y1, x2, y2, radius=25, fill="", outline="", widt
     return tuple(items)
 
 
-class ReportDashboard(tk.Tk):
+class ReportDashboard(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Report")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import tkinter as tk
 from collections import deque
 from pathlib import Path
@@ -8,7 +9,12 @@ from pathlib import Path
 import mysql.connector
 from PIL import Image, ImageFilter, ImageTk
 
+from app_window import AppWindow, get_app_root
 from navigation import launch_page
+
+
+NAME_PLACEHOLDER = "Employee Full Name"
+ID_PLACEHOLDER = "Employee ID"
 
 # ── Paths ─────────────────────────────────────────────────────────────
 
@@ -169,9 +175,12 @@ def _db_fetch_one(query: str, params: tuple) -> dict | None:
 # ── App ────────────────────────────────────────────────────────────────
 class LoginApp:
     def __init__(self) -> None:
+        for key in ("PETBED_EMPLOYEE_ID", "PETBED_EMPLOYEE_NAME", "PETBED_EMPLOYEE_ROLE", "PETBED_ROLE"):
+            os.environ.pop(key, None)
+
         _extract_pets()
 
-        self.root = tk.Tk()
+        self.root = AppWindow()
         self.root.title("Pet&Bed")
 
         # Fullscreen + lấy kích thước thật
@@ -264,7 +273,7 @@ class LoginApp:
             self._cv, font=("Baghdad", fs_in), relief=tk.FLAT, bd=0,
             highlightthickness=0, width=ew,
         )
-        self._name_entry.insert(0, "Your Full Name")
+        self._name_entry.insert(0, NAME_PLACEHOLDER)
         self._name_entry.bind("<FocusIn>", self._on_focus_in_name)
         self._name_entry.bind("<FocusOut>", self._on_focus_out_name)
         self._name_win = self._cv.create_window(
@@ -283,7 +292,7 @@ class LoginApp:
             self._cv, font=("Baghdad", fs_in), relief=tk.FLAT, bd=0,
             highlightthickness=0, width=ew,
         )
-        self._id_entry.insert(0, "Your ID")
+        self._id_entry.insert(0, ID_PLACEHOLDER)
         self._id_entry.bind("<FocusIn>", self._on_focus_in_id)
         self._id_entry.bind("<FocusOut>", self._on_focus_out_id)
         self._id_win = self._cv.create_window(
@@ -329,14 +338,14 @@ class LoginApp:
         self._cv.itemconfig(self._title_item, fill=t["text"])
         self._cv.itemconfig(self._tagline_item, fill=t["text_light"])
 
-        ph = self._name_entry.get() in ("", "Your Full Name")
+        ph = self._name_entry.get() in ("", NAME_PLACEHOLDER)
         self._name_entry.configure(
             bg=t["input_bg"], fg=t["text_light"] if ph else t["text"],
             insertbackground=t["text"],
         )
         self._cv.itemconfig(self._name_bg, fill=t["input_bg"], outline=t["input_border"])
 
-        ph2 = self._id_entry.get() in ("", "Your ID")
+        ph2 = self._id_entry.get() in ("", ID_PLACEHOLDER)
         self._id_entry.configure(
             bg=t["input_bg"], fg=t["text_light"] if ph2 else t["text"],
             insertbackground=t["text"],
@@ -366,23 +375,23 @@ class LoginApp:
 
     # ── Focus handlers ───────────────────────────────────────────
     def _on_focus_in_name(self, _e: object) -> None:
-        if self._name_entry.get() == "Your Full Name":
+        if self._name_entry.get() == NAME_PLACEHOLDER:
             self._name_entry.delete(0, tk.END)
             self._name_entry.configure(fg=self._t["text"])
 
     def _on_focus_out_name(self, _e: object) -> None:
         if self._name_entry.get() == "":
-            self._name_entry.insert(0, "Your Full Name")
+            self._name_entry.insert(0, NAME_PLACEHOLDER)
             self._name_entry.configure(fg=self._t["text_light"])
 
     def _on_focus_in_id(self, _e: object) -> None:
-        if self._id_entry.get() == "Your ID":
+        if self._id_entry.get() == ID_PLACEHOLDER:
             self._id_entry.delete(0, tk.END)
             self._id_entry.configure(fg=self._t["text"])
 
     def _on_focus_out_id(self, _e: object) -> None:
         if self._id_entry.get() == "":
-            self._id_entry.insert(0, "Your ID")
+            self._id_entry.insert(0, ID_PLACEHOLDER)
             self._id_entry.configure(fg=self._t["text_light"])
 
     # ── Button ───────────────────────────────────────────────────
@@ -397,10 +406,10 @@ class LoginApp:
             return
         name = self._name_entry.get().strip()
         uid = self._id_entry.get().strip()
-        if name in ("", "Your Full Name"):
+        if name in ("", NAME_PLACEHOLDER):
             self._cv.itemconfig(self._msg_item, text="Please enter your full name")
             return
-        if uid in ("", "Your ID"):
+        if uid in ("", ID_PLACEHOLDER):
             self._cv.itemconfig(self._msg_item, text="Please enter your ID")
             return
         self._cv.itemconfig(self._msg_item, text="")
@@ -409,24 +418,50 @@ class LoginApp:
 
     def _do_auth(self, name: str, uid: str) -> None:
         try:
-            cust = _db_fetch_one(
-                "SELECT customer_id, full_name FROM customers "
-                "WHERE full_name = %s AND customer_id = %s",
-                (name, uid),
+            employee_id = self._normalize_employee_id(uid)
+            employee = _db_fetch_one(
+                """
+                SELECT employee_id, full_name, role
+                FROM employees
+                WHERE full_name = %s
+                  AND employee_id = %s
+                  AND (is_active = 1 OR is_active = b'1')
+                LIMIT 1
+                """,
+                (name, employee_id),
             )
-            if cust:
+            if employee:
+                app_role = self._app_role(employee.get("role"))
+                os.environ["PETBED_EMPLOYEE_ID"] = str(employee["employee_id"])
+                os.environ["PETBED_EMPLOYEE_NAME"] = str(employee["full_name"])
+                os.environ["PETBED_EMPLOYEE_ROLE"] = str(employee.get("role") or "")
+                os.environ["PETBED_ROLE"] = app_role
                 self._cv.itemconfig(self._msg_item,
-                                     text=f"Welcome, {cust['full_name']}!",
+                                     text=f"Welcome, {employee['full_name']}!",
                                      fill="#2ecc71")
                 self.root.after(650, self._open_dashboard)
             else:
                 self._cv.itemconfig(self._msg_item,
-                                     text="Account not found.",
+                                     text="Employee account not found.",
                                      fill=self._t["text"])
         except Exception as e:
             self._cv.itemconfig(self._msg_item, text=str(e), fill=self._t["text"])
         finally:
             self._auth_busy = False
+
+    @staticmethod
+    def _normalize_employee_id(value: str) -> int:
+        text = (value or "").strip().upper()
+        if text.startswith("EMP"):
+            text = text[3:]
+        text = text.lstrip("0") or "0"
+        if not text.isdigit():
+            raise ValueError("Employee ID must be a number or EMP code")
+        return int(text)
+
+    @staticmethod
+    def _app_role(db_role: str | None) -> str:
+        return "manager" if str(db_role or "").strip().lower() == "manager" else "employee"
 
     def _open_dashboard(self) -> None:
         if self._timer_id:
@@ -438,7 +473,7 @@ class LoginApp:
     # ── Lifecycle ────────────────────────────────────────────────
     def run(self) -> None:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.mainloop()
+        get_app_root().mainloop()
 
     def _on_close(self) -> None:
         if self._timer_id:

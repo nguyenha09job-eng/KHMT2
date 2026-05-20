@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import subprocess
 import sys
+import os
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -77,10 +78,20 @@ ALIASES = {
 def resolve_page(page: str | None) -> str:
     if not page:
         return "Dashboard"
+    if page == "Staff":
+        return staff_page_for_current_user()
     if page in PAGE_SPECS:
         return page
     normalized = page.strip().lower().replace("_", "-")
-    return ALIASES.get(normalized, "Dashboard")
+    target = ALIASES.get(normalized, "Dashboard")
+    if target == "Staff":
+        return staff_page_for_current_user()
+    return target
+
+
+def staff_page_for_current_user() -> str:
+    role = os.environ.get("PETBED_ROLE", "").strip().lower()
+    return "Staff" if role == "manager" else "Staff Dashboard"
 
 
 def build_command(page: str, *extra_args: str) -> list[str]:
@@ -88,7 +99,45 @@ def build_command(page: str, *extra_args: str) -> list[str]:
 
 
 def launch_page(page: str, *extra_args: str) -> None:
-    subprocess.Popen(build_command(page, *extra_args), cwd=Path(__file__).parent)
+    window = create_page(page, *extra_args)
+    try:
+        window.lift()
+        window.focus_force()
+    except Exception:
+        pass
+
+
+def _arg_value(args: tuple[str, ...], name: str) -> str | None:
+    try:
+        index = args.index(name)
+    except ValueError:
+        return None
+    if index + 1 >= len(args):
+        return None
+    return args[index + 1]
+
+
+def create_page(page: str, *extra_args: str):
+    page_name = resolve_page(page)
+    spec = PAGE_SPECS[page_name]
+    module = importlib.import_module(spec.module)
+    page_class = getattr(module, spec.class_name)
+
+    if page_name == "Login":
+        controller = page_class()
+        controller.root.protocol("WM_DELETE_WINDOW", controller._on_close)
+        controller.root._controller = controller
+        return controller.root
+
+    if page_name == "Pet Details":
+        pet_id = _arg_value(extra_args, "--pet-id")
+        return page_class(pet_id=int(pet_id) if pet_id else None)
+
+    if page_name == "Customer Profile":
+        customer_id = _arg_value(extra_args, "--customer-id")
+        return page_class(customer_id=int(customer_id) if customer_id else None)
+
+    return page_class()
 
 
 def _destroy(window) -> None:
@@ -102,9 +151,14 @@ def switch_to(window, page: str, current_page: str | None = None) -> None:
     target = resolve_page(page)
     if current_page and resolve_page(current_page) == target:
         return
-    launch_page(target)
+    new_window = create_page(target)
     try:
-        window.after(80, lambda: _destroy(window))
+        new_window.lift()
+        new_window.focus_force()
+    except Exception:
+        pass
+    try:
+        window.after(60, lambda: _destroy(window))
     except Exception:
         _destroy(window)
 

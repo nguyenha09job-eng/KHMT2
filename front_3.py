@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 import unicodedata
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login, switch_to
 
@@ -536,7 +537,7 @@ class BookingBackend:
         return [f"R-{int(row['room_id']):02d}" for row in rows] if rows else []
 
 
-class BookingDashboard(tk.Tk):
+class BookingDashboard(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Booking")

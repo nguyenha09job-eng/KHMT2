@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login, open_popup, switch_to
 
@@ -447,7 +448,7 @@ class PenaltyPopup(tk.Toplevel):
             messagebox.showerror("Error", f"Failed to add penalty: {e}", parent=self)
 
 
-class StaffPage(tk.Tk):
+class StaffPage(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Staff")

@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 
+from app_window import AppWindow
 from database import DatabaseConnection
 from navigation import bind_click, bind_nav_item, logout_to_login
 
@@ -252,7 +253,7 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     return tuple(items)
 
 
-class StaffDashboard(tk.Tk):
+class StaffDashboard(AppWindow):
     def __init__(self):
         super().__init__()
         self.title("Pet&Bed - Staff")
@@ -300,7 +301,7 @@ class StaffDashboard(tk.Tk):
 
         # Salary tab state
         self._salary_tab = tk.StringVar(value="Week")
-        self.backend = EmployeeDashboardBackend()
+        self.backend = EmployeeDashboardBackend(employee_id=os.environ.get("PETBED_EMPLOYEE_ID"))
         self.staff_data = self.backend.get_data()
         self._salary_values = self.staff_data["salary"]
 
