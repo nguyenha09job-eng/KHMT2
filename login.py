@@ -8,8 +8,27 @@ from pathlib import Path
 import mysql.connector
 from PIL import Image, ImageFilter, ImageTk
 
+from navigation import launch_page
+
 # ── Paths ─────────────────────────────────────────────────────────────
-_BASE = Path(__file__).parent.parent
+
+def _find_project_root() -> Path:
+    roots = []
+    for start in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+        roots.append(start)
+        roots.extend(start.parents)
+
+    seen = set()
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        if (root / "image" / "pet_login.png").exists():
+            return root
+    return Path(__file__).resolve().parent
+
+
+_BASE = _find_project_root()
 _EXTRACTED_DIR = _BASE / "assets" / "extracted"
 _PET_LOGIN_IMG = _BASE / "image" / "pet_login.png"
 _EXTRACTED_ANIMALS = [
@@ -399,6 +418,7 @@ class LoginApp:
                 self._cv.itemconfig(self._msg_item,
                                      text=f"Welcome, {cust['full_name']}!",
                                      fill="#2ecc71")
+                self.root.after(650, self._open_dashboard)
             else:
                 self._cv.itemconfig(self._msg_item,
                                      text="Account not found.",
@@ -407,6 +427,13 @@ class LoginApp:
             self._cv.itemconfig(self._msg_item, text=str(e), fill=self._t["text"])
         finally:
             self._auth_busy = False
+
+    def _open_dashboard(self) -> None:
+        if self._timer_id:
+            self._cv.after_cancel(self._timer_id)
+            self._timer_id = None
+        launch_page("Dashboard")
+        self.root.destroy()
 
     # ── Lifecycle ────────────────────────────────────────────────
     def run(self) -> None:

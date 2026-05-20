@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login, open_popup
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -83,6 +84,7 @@ class CustomerPetBackend:
             species = row.get("species")
             data.append({
                 "customer_id": row.get("customer_id"),
+                "pet_id": row.get("pet_id"),
                 "customer": row.get("full_name") or "-",
                 "phone": row.get("phone") or "-",
                 "pet_name": pet_name,
@@ -175,7 +177,8 @@ class CustomerPetDashboard(tk.Tk):
         self.sidebar_canvas.scale("all", 0, 0, s, s)
         self.draw_content()
         self.canvas.scale("all", 0, 0, s, s)
-        self._create_search_entry()
+        if self._search_entry:
+            self._search_entry.focus_set()
 
         self.canvas.update_idletasks()
         bbox = self.canvas.bbox("all")
@@ -200,32 +203,6 @@ class CustomerPetDashboard(tk.Tk):
             print(f"Khong the tai du lieu Customer & Pet: {exc}")
             return []
 
-    def _create_search_entry(self):
-        """Place Entry widget over the search bar on content_container (persistent)."""
-        if self._search_entry is not None:
-            return
-        s = self._s
-        dx = -self.BASE_SIDE_W
-        y_off = self.Y_OFF
-        s_y1 = 268 + y_off
-        s_y2 = 304 + y_off
-        entry_x = int((330 + dx) * s)
-        entry_y = int((s_y1 + 6) * s)
-        entry_w = int(760 * s)
-        entry_h = int((s_y2 - s_y1 - 12) * s)
-        self._search_entry = tk.Entry(
-            self.content_container,
-            textvariable=self.search_var,
-            font=self.F_SEARCH,
-            bg=self.C_WHITE,
-            fg=self.C_TEXT,
-            bd=0,
-            highlightthickness=0,
-            insertbackground=self.C_TEXT,
-        )
-        self._search_entry.place(x=entry_x, y=entry_y, width=entry_w, height=entry_h)
-        self._search_entry.focus_set()
-
     def _on_search_change(self, *args):
         """Filter table data on search text change and redraw."""
         if self._search_updating:
@@ -245,7 +222,15 @@ class CustomerPetDashboard(tk.Tk):
         self._search_updating = False
 
     def _redraw_table(self):
-        """Clear canvas and redraw content. Entry widget persists on content_container."""
+        """Clear canvas and redraw content. Entry widget is part of canvas window."""
+        # Save cursor index
+        curr_pos = tk.END
+        if self._search_entry:
+            try:
+                curr_pos = self._search_entry.index(tk.INSERT)
+            except Exception:
+                pass
+
         self.canvas.delete("all")
         self.draw_content()
         self.canvas.scale("all", 0, 0, self._s, self._s)
@@ -253,6 +238,14 @@ class CustomerPetDashboard(tk.Tk):
         bbox = self.canvas.bbox("all")
         if bbox:
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
+
+        # Restore focus & cursor index
+        if self._search_entry:
+            self._search_entry.focus_set()
+            try:
+                self._search_entry.icursor(curr_pos)
+            except Exception:
+                pass
 
     # ─────────────────────────── SIDEBAR ───────────────────────────
     def draw_sidebar(self):
@@ -266,10 +259,13 @@ class CustomerPetDashboard(tk.Tk):
         item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 4 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV,
-                           fill=self.C_TEXT, anchor="w")
+                           fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Customer & Pet")
             y += item_h + gap
 
         # -- Rabbit image above logout --
@@ -314,7 +310,7 @@ class CustomerPetDashboard(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # ─────────────────────────── IMAGE HELPER ───────────────────────
     def create_rounded_image(self, image_path, width, height, radius):
@@ -349,7 +345,7 @@ class CustomerPetDashboard(tk.Tk):
             return self.C_CAT_CHIP
         return self.C_DOG_CHIP
 
-    def _draw_pet_chip(self, cv, cx, cy, label, name, bg):
+    def _draw_pet_chip(self, cv, cx, cy, label, name, bg, tags=None):
         """Draw a pill chip with pet type + name."""
         text = f"{label} {name}"
         chip_w = min(max(len(text) * 8 + 24, 88), 140)
@@ -358,8 +354,9 @@ class CustomerPetDashboard(tk.Tk):
         y1 = cy - chip_h // 2
         x2 = x1 + chip_w
         y2 = y1 + chip_h
-        _round_rect(cv, x1, y1, x2, y2, radius=chip_h // 2, fill=bg)
-        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=self.C_TEXT, width=int((chip_w - 10) * self._s))
+        _round_rect(cv, x1, y1, x2, y2, radius=chip_h // 2, fill=bg, tags=tags)
+        cv.create_text(cx, cy, text=text, font=self.F_CHIP, fill=self.C_TEXT,
+                       width=int((chip_w - 10) * self._s), tags=tags)
 
     # ─────────────────────────── MAIN CONTENT ───────────────────────
     def draw_content(self):
@@ -371,6 +368,9 @@ class CustomerPetDashboard(tk.Tk):
         _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 68 + y, radius=20, fill=self.C_WHITE)
         cv.create_text(330 + dx, 49 + y, text="Customer & Pet",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
+        cv.create_text(510 + dx, 49 + y,
+                       text=datetime.now().strftime("%A, %d/%m/%Y"),
+                       font=self.F_TABLE_HEAD, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # ── BANNER IMAGE ──
         _dir = os.path.dirname(__file__)
@@ -384,9 +384,43 @@ class CustomerPetDashboard(tk.Tk):
         s_y1, s_y2 = 268 + y, 304 + y
         s_r = (s_y2 - s_y1) // 2
         _round_rect(cv, 300 + dx, s_y1, 1150 + dx, s_y2, radius=s_r, fill=self.C_WHITE)
-        cv.create_text(338 + dx, (s_y1 + s_y2) // 2,
-                       text="Search by name, phone number, or pet name",
-                       font=self.F_SEARCH, fill="#B5B0AA", anchor="w")
+
+        if not self.search_var.get():
+            cv.create_text(338 + dx, (s_y1 + s_y2) // 2,
+                           text="Search by name, phone number, or pet name",
+                           font=self.F_SEARCH, fill="#B5B0AA", anchor="w", tags="placeholder")
+
+        # Create search Entry as a canvas window item (scrolls with canvas!)
+        entry_x = 330 + dx
+        entry_y = s_y1 + 6
+        entry_w = 760
+        entry_h = s_y2 - s_y1 - 12
+
+        if self._search_entry is not None:
+            try:
+                self._search_entry.destroy()
+            except Exception:
+                pass
+
+        self._search_entry = tk.Entry(
+            self.canvas,
+            textvariable=self.search_var,
+            font=self.F_SEARCH,
+            bg=self.C_WHITE,
+            fg=self.C_TEXT,
+            bd=0,
+            highlightthickness=0,
+            insertbackground=self.C_TEXT,
+        )
+
+        cv.create_window(
+            entry_x + entry_w // 2,
+            entry_y + entry_h // 2,
+            window=self._search_entry,
+            width=entry_w,
+            height=entry_h,
+            tags="search_entry_window"
+        )
         # Magnifier icon
         ic_cx, ic_cy = 1125 + dx, (s_y1 + s_y2) // 2
         ic_r = 9
@@ -435,9 +469,14 @@ class CustomerPetDashboard(tk.Tk):
 
             # Pet chip centred in the Pets column
             chip_cx = col_xs[2] + 70
+            pet_tag = f"pet_profile_{ri}"
             self._draw_pet_chip(cv, chip_cx, rcy,
                                 row["pet_label"], row["pet_name"],
-                                self._pet_chip_color(row["pet_chip"]))
+                                self._pet_chip_color(row["pet_chip"]),
+                                tags=pet_tag)
+            if row.get("pet_id"):
+                bind_click(cv, pet_tag,
+                           lambda _e, pid=row["pet_id"]: open_popup("Pet Details", "--pet-id", str(pid)))
 
             cv.create_text(col_xs[3], rcy, text=row["points"],
                            font=self.F_TABLE_BODY, fill=self.C_TEXT, anchor="w")
@@ -448,11 +487,14 @@ class CustomerPetDashboard(tk.Tk):
             pbw, pbh = 90, 30
             pbx = 1130 + dx - pbw
             pby = rcy - pbh // 2
+            profile_tag = f"profile_btn_{ri}"
             _round_rect(cv, pbx, pby, pbx + pbw, pby + pbh,
-                        radius=pbh // 2, fill=self.C_PROFILE_BG)
+                        radius=pbh // 2, fill=self.C_PROFILE_BG, tags=profile_tag)
             cv.create_text(pbx + pbw // 2, rcy,
                            text="Profile", font=self.F_PROFILE,
-                           fill=self.C_WHITE)
+                           fill=self.C_WHITE, tags=profile_tag)
+            bind_click(cv, profile_tag,
+                       lambda _e, cid=row["customer_id"]: open_popup("Customer Profile", "--customer-id", str(cid)))
 
             # Row divider (not after last)
             if ri < len(table_data) - 1:

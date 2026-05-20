@@ -7,6 +7,291 @@ from datetime import datetime
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login
+
+
+class FuzzyInsightEngine:
+    """Small rule-based fuzzy engine that turns report data into guidance."""
+
+    def __init__(self, report_data):
+        self.data = report_data
+
+    @staticmethod
+    def _clamp(value, low=0.0, high=1.0):
+        return max(low, min(high, float(value)))
+
+    @staticmethod
+    def _tri(x, a, b, c):
+        x = float(x)
+        if x <= a or x >= c:
+            return 0.0
+        if x == b:
+            return 1.0
+        if x < b:
+            return (x - a) / (b - a)
+        return (c - x) / (c - b)
+
+    @staticmethod
+    def _trap(x, a, b, c, d):
+        x = float(x)
+        if a == b and x <= b:
+            return 1.0
+        if c == d and x >= c:
+            return 1.0
+        if x <= a or x >= d:
+            return 0.0
+        if b <= x <= c:
+            return 1.0
+        if x < b:
+            return (x - a) / (b - a)
+        return (d - x) / (d - c)
+
+    @staticmethod
+    def _defuzzify(rules, default=50):
+        total_weight = sum(weight for weight, _value in rules)
+        if total_weight <= 0:
+            return default
+        return round(sum(weight * value for weight, value in rules) / total_weight)
+
+    @staticmethod
+    def _parse_number(value):
+        text = str(value or "").replace(",", "").strip()
+        digits = []
+        for char in text:
+            if char.isdigit() or char in ".-":
+                digits.append(char)
+        try:
+            return float("".join(digits)) if digits else 0.0
+        except ValueError:
+            return 0.0
+
+    @classmethod
+    def _parse_money(cls, value):
+        text = str(value or "").replace(",", "").strip().upper()
+        amount = cls._parse_number(text)
+        if text.endswith("B"):
+            return amount * 1_000_000_000
+        if text.endswith("M"):
+            return amount * 1_000_000
+        if text.endswith("K"):
+            return amount * 1_000
+        return amount
+
+    def _stat_value(self, label):
+        for stat_label, value, _sub in self.data.get("stats", []):
+            if stat_label == label:
+                return value
+        return 0
+
+    def _trend_change(self):
+        values = [
+            float(value or 0)
+            for label, value in self.data.get("bar_data", [])
+            if label != "-"
+        ]
+        if len(values) < 2 or max(values) <= 0:
+            return 0.0
+
+        half = max(1, len(values) // 2)
+        early = sum(values[:half]) / half
+        late = sum(values[-half:]) / half
+        baseline = max(early, late, 1.0)
+        return (late - early) / baseline * 100
+
+    @staticmethod
+    def _top_segment(segments):
+        valid = []
+        for pct, _color, label in segments or []:
+            name = str(label or "Unknown").split("\n")[0]
+            if name.lower() == "no data":
+                continue
+            valid.append((float(pct or 0), name))
+        if not valid:
+            return "No data", 0.0
+        pct, name = max(valid, key=lambda item: item[0])
+        return name, pct
+
+    @staticmethod
+    def _top_payment(methods):
+        valid = [(str(label or "Unknown"), float(pct or 0) * 100) for label, pct, _color in methods or []]
+        if not valid:
+            return "No data", 0.0
+        return max(valid, key=lambda item: item[1])
+
+    @staticmethod
+    def _confidence(*memberships):
+        return max(45, min(96, round(max(memberships or [0]) * 100)))
+
+    @staticmethod
+    def _insight(title, label, text, score, confidence, color, bg):
+        return {
+            "title": title,
+            "label": label,
+            "text": text,
+            "score": int(score),
+            "confidence": int(confidence),
+            "color": color,
+            "bg": bg,
+        }
+
+    def _revenue_momentum(self):
+        change = self._trend_change()
+        falling = self._trap(change, -100, -100, -28, -8)
+        stable = self._tri(change, -18, 0, 18)
+        rising = self._trap(change, 8, 28, 100, 100)
+        score = self._defuzzify([(falling, 32), (stable, 62), (rising, 88)])
+        confidence = self._confidence(falling, stable, rising)
+
+        if rising >= stable and rising >= falling:
+            return self._insight(
+                "Revenue Momentum",
+                "Rising",
+                f"Late-period revenue is about {abs(change):.0f}% stronger than the early period. Keep staffing and add-on services ready for peaks.",
+                score,
+                confidence,
+                "#5A8A1A",
+                "#D4EDBA",
+            )
+        if falling >= stable:
+            return self._insight(
+                "Revenue Momentum",
+                "Cooling",
+                f"Revenue is about {abs(change):.0f}% softer near the end of this range. Check low days and test room-plus-service bundles.",
+                score,
+                confidence,
+                "#C05070",
+                "#F9D0D8",
+            )
+        return self._insight(
+            "Revenue Momentum",
+            "Stable",
+            f"Revenue movement stays within about {abs(change):.0f}% across the period, so demand looks predictable.",
+            score,
+            confidence,
+            "#8A6A1A",
+            "#F7E4B5",
+        )
+
+    def _capacity_signal(self):
+        occupancy = self._parse_number(self._stat_value("Room Occupancy"))
+        low = self._trap(occupancy, 0, 0, 35, 52)
+        healthy = self._tri(occupancy, 42, 68, 86)
+        high = self._trap(occupancy, 76, 90, 100, 100)
+        score = self._defuzzify([(low, 35), (healthy, 74), (high, 90)])
+        confidence = self._confidence(low, healthy, high)
+        rising = self._trap(self._trend_change(), 8, 28, 100, 100)
+        tight_and_rising = min(high, rising)
+
+        if tight_and_rising >= 0.4:
+            text = f"Occupancy is tight at {occupancy:.0f}% while revenue is improving. Prioritize premium rooms and high-margin add-ons."
+            label = "Premium Window"
+            color, bg = "#5A8A1A", "#D4EDBA"
+        elif high >= healthy and high >= low:
+            text = f"Occupancy is high at {occupancy:.0f}%. Protect room availability and avoid over-discounting limited capacity."
+            label = "Tight"
+            color, bg = "#8A6A1A", "#F7E4B5"
+        elif low >= healthy:
+            text = f"Occupancy is only {occupancy:.0f}%. Use targeted offers to pull bookings into underused rooms."
+            label = "Open Capacity"
+            color, bg = "#C05070", "#F9D0D8"
+        else:
+            text = f"Occupancy sits around {occupancy:.0f}%, a healthy zone for balancing walk-ins, bookings, and service capacity."
+            label = "Balanced"
+            color, bg = "#4A7E78", "#D5F1EE"
+
+        return self._insight("Capacity Signal", label, text, score, confidence, color, bg)
+
+    def _mix_signal(self):
+        service_name, service_pct = self._top_segment(self.data.get("service_segments", []))
+        member_name, member_pct = self._top_segment(self.data.get("membership_segments", []))
+        payment_name, payment_pct = self._top_payment(self.data.get("payment_methods", []))
+        focus_candidates = [
+            ("service", service_name, service_pct),
+            ("membership", member_name, member_pct),
+            ("payment", payment_name, payment_pct),
+        ]
+        focus_type, focus_name, focus_pct = max(focus_candidates, key=lambda item: item[2])
+        diverse = self._trap(focus_pct, 0, 0, 38, 55)
+        focused = self._trap(focus_pct, 50, 68, 100, 100)
+        score = self._defuzzify([(diverse, 82), (focused, 55)], default=68)
+        confidence = self._confidence(diverse, focused)
+
+        if focused >= diverse:
+            if focus_type == "service":
+                text = f"Revenue mix leans toward {focus_name} at {focus_pct:.0f}%. Push one complementary service to reduce dependency."
+            elif focus_type == "membership":
+                text = f"{focus_name} customers drive {focus_pct:.0f}% of revenue. Build a next-best offer for the smaller tiers."
+            else:
+                text = f"{payment_name} covers {focus_pct:.0f}% of payments. Keep that flow smooth, but maintain backup payment options."
+            label = "Concentrated"
+            color, bg = "#8A6A1A", "#F7E4B5"
+        else:
+            text = "Revenue, membership, and payment mix are reasonably distributed, giving the period lower concentration risk."
+            label = "Diversified"
+            color, bg = "#4A7E78", "#D5F1EE"
+
+        return self._insight("Mix Quality", label, text, score, confidence, color, bg)
+
+    def _promotion_signal(self):
+        discounts = self.data.get("discounts", [])
+        discount_total = sum(float(row[8] or 0) for row in discounts) if discounts else 0.0
+        revenue = self._parse_money(self._stat_value("Total Revenue"))
+        discount_ratio = (discount_total / max(revenue + discount_total, 1)) * 100
+
+        low = self._trap(discount_ratio, 0, 0, 2, 5)
+        medium = self._tri(discount_ratio, 3, 8, 14)
+        high = self._trap(discount_ratio, 10, 18, 40, 40)
+        score = self._defuzzify([(low, 82), (medium, 66), (high, 38)], default=74)
+        confidence = self._confidence(low, medium, high)
+
+        if not discounts:
+            return self._insight(
+                "Promotion Guardrail",
+                "Clean",
+                "No discount rows appear in this range, so margin leakage from listed promotions looks low.",
+                82,
+                80,
+                "#4A7E78",
+                "#D5F1EE",
+            )
+        if high >= medium and high >= low:
+            label = "High Discount"
+            text = f"Listed discounts equal roughly {discount_ratio:.1f}% of visible revenue. Review whether they are lifting repeat bookings."
+            color, bg = "#C05070", "#F9D0D8"
+        elif medium >= low:
+            label = "Watch"
+            text = f"Discount usage is moderate at about {discount_ratio:.1f}% of visible revenue. Keep it tied to VIP or repeat behavior."
+            color, bg = "#8A6A1A", "#F7E4B5"
+        else:
+            label = "Controlled"
+            text = f"Discount impact is low at about {discount_ratio:.1f}% of visible revenue, so promotions look margin-friendly."
+            color, bg = "#5A8A1A", "#D4EDBA"
+
+        return self._insight("Promotion Guardrail", label, text, score, confidence, color, bg)
+
+    def build(self):
+        has_revenue = self._parse_money(self._stat_value("Total Revenue")) > 0
+        has_transactions = self._parse_number(self._stat_value("Transactions")) > 0
+        if not has_revenue and not has_transactions:
+            return [
+                self._insight(
+                    "Data Readiness",
+                    "Waiting",
+                    "There is not enough paid activity in this range yet. Switch range or wait for billing data to generate stronger insights.",
+                    45,
+                    70,
+                    "#7A685F",
+                    "#EFE6DD",
+                )
+            ]
+
+        insights = [
+            self._revenue_momentum(),
+            self._capacity_signal(),
+            self._mix_signal(),
+            self._promotion_signal(),
+        ]
+        return insights[:4]
 
 
 class ReportBackend:
@@ -65,7 +350,7 @@ class ReportBackend:
         self.custom_start = custom_start
         self.custom_end = custom_end
         try:
-            return {
+            data = {
                 "today": datetime.now().strftime("%d/%m/%Y"),
                 "range": self.get_range_label(),
                 "bar_title": f"Revenue Trend - {active_tab}",
@@ -76,6 +361,8 @@ class ReportBackend:
                 "payment_methods": self.get_payment_methods(),
                 "discounts": self.get_discounts(),
             }
+            data["ai_insights"] = FuzzyInsightEngine(data).build()
+            return data
         except Exception as exc:
             print(f"Report backend error: {exc}")
             return self.fallback_data(active_tab)
@@ -297,7 +584,7 @@ class ReportBackend:
                 end_display = datetime.strptime(self.custom_end, "%Y-%m-%d").strftime("%d/%m/%Y")
             except ValueError:
                 pass
-        return {
+        data = {
             "today": datetime.now().strftime("%d/%m/%Y"),
             "range": {"start": start_display, "end": end_display},
             "bar_title": f"Revenue Trend - {active_tab}",
@@ -308,6 +595,8 @@ class ReportBackend:
             "payment_methods": [("No data", 1.0, "#C8C8C8")],
             "discounts": [],
         }
+        data["ai_insights"] = FuzzyInsightEngine(data).build()
+        return data
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -390,6 +679,9 @@ class ReportDashboard(tk.Tk):
         self.F_TABLE_HEAD  = ("Baghdad", max(10, int(14 * s)), "bold")
         self.F_TABLE_BODY  = ("Baghdad", max(9,  int(13 * s)))
         self.F_CHIP        = ("Baghdad", max(9,  int(12 * s)), "bold")
+        self.F_AI_TITLE    = ("Arial Rounded MT Bold", max(10, int(14 * s)), "bold")
+        self.F_AI_BODY     = ("Baghdad", max(9,  int(12 * s)))
+        self.F_AI_META     = ("Baghdad", max(8,  int(11 * s)), "bold")
 
         self.images = []
         self.backend = ReportBackend()
@@ -454,10 +746,14 @@ class ReportDashboard(tk.Tk):
         item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 7 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV,
-                           fill=self.C_WHITE if i == 7 else self.C_TEXT, anchor="w")
+                           fill=self.C_WHITE if i == 7 else self.C_TEXT,
+                           anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Report")
             y += item_h + gap
 
         # Hedgehog / porcupine icon
@@ -485,7 +781,7 @@ class ReportDashboard(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # ─────────────────────────── IMAGE HELPER ───────────────────────
     def create_rounded_image(self, image_path, width, height, radius, crop_align="center"):
@@ -588,22 +884,130 @@ class ReportDashboard(tk.Tk):
         cv.create_text((x1 + x2) // 2, y1 + 20,
                        text=title, font=self.F_SECTION, fill=self.C_TEXT)
 
+        # Card inner padding for label clamping
+        pad_x, pad_top, pad_bot = 14, 42, 14
+
         start_angle = 90
         for pct, color, label in segments:
             extent = pct / 100 * 360
             cv.create_arc(cx - r_out, cy - r_out, cx + r_out, cy + r_out,
                           start=start_angle, extent=-extent,
                           fill=color, outline="")
-            # Label placement
+            # Label placement — clamped inside card boundaries
             mid_angle = math.radians(start_angle - extent / 2)
-            lx = cx + (r_out + 18) * math.cos(mid_angle)
-            ly = cy - (r_out + 18) * math.sin(mid_angle)
+            lx = cx + (r_out + 22) * math.cos(mid_angle)
+            ly = cy - (r_out + 22) * math.sin(mid_angle)
+            # Clamp to stay inside the card
+            lx = max(x1 + pad_x + 30, min(lx, x2 - pad_x - 30))
+            ly = max(y1 + pad_top + 8, min(ly, y2 - pad_bot - 8))
             cv.create_text(lx, ly, text=label, font=self.F_PIE_LBL, fill=self.C_TEXT)
             start_angle -= extent
 
         # White hole for donut
         cv.create_oval(cx - r_in, cy - r_in, cx + r_in, cy + r_in,
                        fill=self.C_WHITE, outline="")
+
+    # ─────────────────────────── FUZZY AI INSIGHTS ──────────────────
+    @staticmethod
+    def _wrap_text(text, max_chars=44, max_lines=2):
+        words = str(text or "").split()
+        lines = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) == max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > len(" ".join(lines).split()):
+            lines[-1] = lines[-1].rstrip(".") + "..."
+        return "\n".join(lines)
+
+    def _draw_ai_insights(self, cv, x1, y1, x2, y2, insights):
+        _round_rect(cv, x1, y1, x2, y2, radius=20, fill=self.C_WHITE)
+        cv.create_text(x1 + 24, y1 + 24, text="Fuzzy AI Insights",
+                       font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
+        cv.create_text(x1 + 24, y1 + 48,
+                       text="Rule-based signals from the current report data",
+                       font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT, anchor="w")
+
+        chip_w, chip_h = 118, 26
+        chip_x2 = x2 - 24
+        chip_x1 = chip_x2 - chip_w
+        chip_y1 = y1 + 17
+        _round_rect(cv, chip_x1, chip_y1, chip_x2, chip_y1 + chip_h,
+                    radius=chip_h // 2, fill="#F7E4B5")
+        cv.create_text((chip_x1 + chip_x2) // 2, chip_y1 + chip_h // 2,
+                       text="Fuzzy logic", font=self.F_AI_META, fill="#8A6A1A")
+
+        items = (insights or [])[:4]
+        if not items:
+            cv.create_text((x1 + x2) // 2, (y1 + y2) // 2,
+                           text="No insight data available",
+                           font=self.F_TABLE_BODY, fill=self.C_TEXT_LIGHT)
+            return
+
+        grid_x1, grid_x2 = x1 + 24, x2 - 24
+        grid_y1, grid_y2 = y1 + 70, y2 - 18
+
+        if len(items) == 1:
+            self._draw_ai_insight_cell(cv, grid_x1, grid_y1, grid_x2, grid_y2,
+                                       items[0], max_chars=92)
+            return
+
+        mid_x = (grid_x1 + grid_x2) // 2
+        mid_y = (grid_y1 + grid_y2) // 2
+        cv.create_line(mid_x, grid_y1, mid_x, grid_y2, fill=self.C_DIVIDER, width=1)
+        cv.create_line(grid_x1, mid_y, grid_x2, mid_y, fill=self.C_DIVIDER, width=1)
+
+        cell_w = (grid_x2 - grid_x1) / 2
+        cell_h = (grid_y2 - grid_y1) / 2
+        for idx, item in enumerate(items):
+            col = idx % 2
+            row = idx // 2
+            cx1 = grid_x1 + col * cell_w + (16 if col else 0)
+            cx2 = grid_x1 + (col + 1) * cell_w - (16 if not col else 0)
+            cy1 = grid_y1 + row * cell_h + (12 if row else 0)
+            cy2 = grid_y1 + (row + 1) * cell_h - (12 if not row else 0)
+            self._draw_ai_insight_cell(cv, cx1, cy1, cx2, cy2, item)
+
+    def _draw_ai_insight_cell(self, cv, x1, y1, x2, y2, insight, max_chars=42):
+        color = insight.get("color", self.C_TEXT)
+        bg = insight.get("bg", "#EFE6DD")
+        label = str(insight.get("label", "Signal"))
+        score = int(insight.get("score", 0))
+        confidence = int(insight.get("confidence", 0))
+
+        cv.create_text(x1, y1 + 10, text=insight.get("title", "Insight"),
+                       font=self.F_AI_TITLE, fill=self.C_TEXT, anchor="w")
+
+        chip_w = min(112, max(76, 8 * len(label) + 22))
+        chip_h = 22
+        chip_x1 = x2 - chip_w
+        _round_rect(cv, chip_x1, y1, x2, y1 + chip_h,
+                    radius=chip_h // 2, fill=bg)
+        cv.create_text((chip_x1 + x2) // 2, y1 + chip_h // 2,
+                       text=label[:18], font=self.F_CHIP, fill=color)
+
+        body = self._wrap_text(insight.get("text", ""), max_chars=max_chars, max_lines=2)
+        cv.create_text(x1, y1 + 36, text=body,
+                       font=self.F_AI_BODY, fill=self.C_TEXT_LIGHT, anchor="w")
+
+        bar_x1 = x1
+        bar_x2 = x2 - 92
+        bar_y1 = y2 - 13
+        bar_y2 = bar_y1 + 8
+        _round_rect(cv, bar_x1, bar_y1, bar_x2, bar_y2, radius=4, fill="#EFE6DD")
+        fill_x2 = bar_x1 + (bar_x2 - bar_x1) * max(0, min(score, 100)) / 100
+        _round_rect(cv, bar_x1, bar_y1, fill_x2, bar_y2, radius=4, fill=color)
+        cv.create_text(x2, bar_y1 + 4, text=f"{score}/100 - {confidence}%",
+                       font=self.F_AI_META, fill=self.C_TEXT, anchor="e")
 
     # ─────────────────────────── MAIN CONTENT ───────────────────────
     def draw_content(self):
@@ -626,34 +1030,32 @@ class ReportDashboard(tk.Tk):
         # ── DATE RANGE + QUICK TABS ──
         dr_y1, dr_y2 = 82 + y, 118 + y
         dr_r = (dr_y2 - dr_y1) // 2
-        _round_rect(cv, cx0, dr_y1, cx0 + 550, dr_y2, radius=dr_r, fill=self.C_WHITE)
+        _round_rect(cv, cx0, dr_y1, cx0 + 550, dr_y2, radius=dr_r, fill=self.C_WHITE,
+                    tags="date_bar")
         cv.create_text(cx0 + 18, (dr_y1 + dr_y2) // 2,
-                       text="Custom", font=self.F_TAB, fill=self.C_TEXT, anchor="w")
+                       text="Custom", font=self.F_TAB, fill=self.C_TEXT, anchor="w",
+                       tags="date_bar")
 
         is_custom = self._active_tab == "Custom"
         date_fill = self.C_ACTIVE if is_custom else self.C_TEXT
-        s_tag = "cst_s" if is_custom else ""
         cv.create_text(cx0 + 90, (dr_y1 + dr_y2) // 2,
                        text=self.report_data["range"]["start"], font=self.F_DATE,
-                       fill=date_fill, anchor="w", tags=s_tag)
-        cal1_tag = "cst_c1" if is_custom else ""
+                       fill=date_fill, anchor="w", tags="date_bar")
         cv.create_text(cx0 + 185, (dr_y1 + dr_y2) // 2,
-                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags=cal1_tag)
+                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags="date_bar")
         cv.create_text(cx0 + 210, (dr_y1 + dr_y2) // 2,
-                       text="→", font=self.F_DATE, fill=self.C_TEXT, anchor="w")
-        e_tag = "cst_e" if is_custom else ""
+                       text="→", font=self.F_DATE, fill=self.C_TEXT, anchor="w",
+                       tags="date_bar")
         cv.create_text(cx0 + 238, (dr_y1 + dr_y2) // 2,
                        text=self.report_data["range"]["end"], font=self.F_DATE,
-                       fill=date_fill, anchor="w", tags=e_tag)
-        cal2_tag = "cst_c2" if is_custom else ""
+                       fill=date_fill, anchor="w", tags="date_bar")
         cv.create_text(cx0 + 343, (dr_y1 + dr_y2) // 2,
-                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags=cal2_tag)
+                       text="🗓", font=("Segoe UI Emoji", 14), anchor="w", tags="date_bar")
 
-        if is_custom:
-            for tag in ("cst_s", "cst_e", "cst_c1", "cst_c2"):
-                cv.tag_bind(tag, "<Button-1>", lambda e: self._edit_custom_date())
-                cv.tag_bind(tag, "<Enter>", lambda e: cv.config(cursor="hand2"))
-                cv.tag_bind(tag, "<Leave>", lambda e: cv.config(cursor=""))
+        # Always clickable — opens date editor and switches to Custom tab
+        cv.tag_bind("date_bar", "<Button-1>", lambda e: self._edit_custom_date())
+        cv.tag_bind("date_bar", "<Enter>", lambda e: cv.config(cursor="hand2"))
+        cv.tag_bind("date_bar", "<Leave>", lambda e: cv.config(cursor=""))
 
         # ── CAT BANNER IMAGE ──
         img_path = os.path.join(_dir, "image", "report.jpg")
@@ -719,25 +1121,31 @@ class ReportDashboard(tk.Tk):
                 cv.create_text(scx, sc_y2 - 18, text=sub,
                                font=self.F_CARD_SUB, fill=self.C_TEXT_LIGHT)
 
+        # ── FUZZY AI INSIGHTS ──
+        ai_y1 = sc_y2 + 18
+        ai_y2 = ai_y1 + 280
+        self._draw_ai_insights(cv, cx0, ai_y1, cx1, ai_y2,
+                               self.report_data.get("ai_insights", []))
+
         # ── DONUT CHARTS ──
-        donut_y1 = sc_y2 + 18
-        donut_y2 = donut_y1 + 200
+        donut_y1 = ai_y2 + 18
+        donut_y2 = donut_y1 + 230
         donut_w  = (cw - 16) // 2
 
         # Revenue by Service
         d1x1, d1x2 = cx0, cx0 + donut_w
-        d1cx = d1x1 + donut_w // 2 - 20
-        d1cy = (donut_y1 + donut_y2) // 2 + 10
-        self._draw_donut(cv, d1cx, d1cy, 68, 38,
+        d1cx = d1x1 + donut_w // 2
+        d1cy = (donut_y1 + donut_y2) // 2 + 12
+        self._draw_donut(cv, d1cx, d1cy, 62, 34,
                          self.report_data["service_segments"],
                          "Revenue by Service",
                          d1x1, donut_y1, d1x2, donut_y2)
 
         # Revenue by Memberships
         d2x1, d2x2 = cx0 + donut_w + 16, cx1
-        d2cx = d2x1 + (d2x2 - d2x1) // 2 - 10
-        d2cy = (donut_y1 + donut_y2) // 2 + 10
-        self._draw_donut(cv, d2cx, d2cy, 68, 38,
+        d2cx = d2x1 + (d2x2 - d2x1) // 2
+        d2cy = (donut_y1 + donut_y2) // 2 + 12
+        self._draw_donut(cv, d2cx, d2cy, 62, 34,
                          self.report_data["membership_segments"],
                          "Revenue by Memberships",
                          d2x1, donut_y1, d2x2, donut_y2)
@@ -846,68 +1254,174 @@ class ReportDashboard(tk.Tk):
                        fill="#C83040", anchor="e")
 
     def _edit_custom_date(self):
-        """Open a dialog to pick custom start/end dates."""
+        """Open a premium Canvas-based dialog to pick custom start/end dates."""
         dialog = tk.Toplevel(self)
         dialog.title("Custom Date Range")
-        dialog.configure(bg="#FFFFFF")
         dialog.transient(self)
         dialog.grab_set()
 
-        fw, fh = 340, 220
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        dialog.geometry(f"{fw}x{fh}+{(sw-fw)//2}+{(sh-fh)//2}")
+        # ===== WINDOW =====
+        WIDTH  = 540
+        HEIGHT = 420
+        dialog.geometry(f"{WIDTH}x{HEIGHT}")
+        dialog.configure(bg="#F5C97A")
         dialog.resizable(False, False)
 
-        pad = 20
-        tk.Label(dialog, text="Start Date (DD/MM/YYYY):",
-                 font=("Arial", 11), bg="#FFFFFF", anchor="w").pack(
-                     fill="x", padx=pad, pady=(pad, 2))
-        start_et = tk.Entry(dialog, font=("Arial", 12), width=14, justify="center")
-        start_et.pack(padx=pad, fill="x")
-        start_et.insert(0, self._custom_start)
+        # Center on screen relative to parent
+        px = self.winfo_x() + (self.winfo_width() - WIDTH) // 2
+        py = self.winfo_y() + (self.winfo_height() - HEIGHT) // 2
+        dialog.geometry(f"{WIDTH}x{HEIGHT}+{px}+{py}")
 
-        tk.Label(dialog, text="End Date (DD/MM/YYYY):",
-                 font=("Arial", 11), bg="#FFFFFF", anchor="w").pack(
-                     fill="x", padx=pad, pady=(10, 2))
-        end_et = tk.Entry(dialog, font=("Arial", 12), width=14, justify="center")
-        end_et.pack(padx=pad, fill="x")
-        end_et.insert(0, self._custom_end)
+        # ===== COLORS =====
+        C_BG     = "#F5C97A"
+        C_WHITE  = "#FFFFFF"
+        C_TEXT   = "#4A3525"
+        C_BORDER = "#D7D0CB"
+        C_PLACE  = "#B6AEA9"
+        C_BTN    = "#F5A623"
 
-        err_var = tk.StringVar()
-        err_lbl = tk.Label(dialog, textvariable=err_var,
-                           font=("Arial", 10), fg="red", bg="#FFFFFF")
-        err_lbl.pack(fill="x", padx=pad)
+        # ===== CANVAS =====
+        cv = tk.Canvas(dialog, width=WIDTH, height=HEIGHT,
+                       bg=C_BG, highlightthickness=0)
+        cv.pack(fill="both", expand=True)
 
-        def apply():
-            s = start_et.get().strip()
-            e = end_et.get().strip()
-            from datetime import datetime
+        # ===== CARD =====
+        PAD = 15
+        CX1, CY1 = PAD, PAD
+        CX2, CY2 = WIDTH - PAD, HEIGHT - PAD
+
+        _round_rect(cv, CX1, CY1, CX2, CY2, radius=28,
+                    fill=C_WHITE, outline="")
+
+        IP = 35  # inner padding
+
+        # ───── TITLE ─────
+        title_y = CY1 + 38
+        cv.create_text(CX1 + IP, title_y,
+                       text="Custom Date Range", anchor="w",
+                       fill=C_TEXT,
+                       font=("Arial Rounded MT Bold", 18, "bold"))
+
+        # Divider
+        div_y = title_y + 24
+        cv.create_line(CX1 + IP, div_y, CX2 - IP, div_y,
+                       fill="#DCD6D2", width=1)
+
+        # ───── START DATE LABEL ─────
+        lbl1_y = div_y + 28
+        cv.create_text(CX1 + IP, lbl1_y,
+                       text="Start Date (DD/MM/YYYY)", anchor="w",
+                       fill=C_TEXT,
+                       font=("Baghdad", 18, "bold"))
+
+        # Start date input box
+        box1_y1 = lbl1_y + 12
+        box1_y2 = box1_y1 + 44
+        box1_x1 = CX1 + IP - 4
+        box1_x2 = CX2 - IP + 4
+
+        _round_rect(cv, box1_x1, box1_y1, box1_x2, box1_y2,
+                    radius=22, fill=C_WHITE, outline="")
+        _round_rect_outline(cv, box1_x1, box1_y1, box1_x2, box1_y2,
+                            radius=22, fill=C_WHITE, outline=C_BORDER, width=1)
+
+        start_entry = tk.Entry(
+            dialog, bd=0, relief="flat",
+            bg=C_WHITE, fg=C_TEXT,
+            font=("Baghdad", 18),
+            insertbackground=C_TEXT,
+            highlightthickness=0
+        )
+        default_start = self._custom_start or datetime.now().strftime("01/%m/%Y")
+        start_entry.insert(0, default_start)
+        start_entry.place(
+            x=box1_x1 + 20,
+            y=(box1_y1 + box1_y2) // 2 - 12,
+            width=box1_x2 - box1_x1 - 40,
+            height=24
+        )
+
+        # ───── END DATE LABEL ─────
+        lbl2_y = box1_y2 + 22
+        cv.create_text(CX1 + IP, lbl2_y,
+                       text="End Date (DD/MM/YYYY)", anchor="w",
+                       fill=C_TEXT,
+                       font=("Baghdad", 18, "bold"))
+
+        # End date input box
+        box2_y1 = lbl2_y + 12
+        box2_y2 = box2_y1 + 44
+        box2_x1 = box1_x1
+        box2_x2 = box1_x2
+
+        _round_rect(cv, box2_x1, box2_y1, box2_x2, box2_y2,
+                    radius=22, fill=C_WHITE, outline="")
+        _round_rect_outline(cv, box2_x1, box2_y1, box2_x2, box2_y2,
+                            radius=22, fill=C_WHITE, outline=C_BORDER, width=1)
+
+        end_entry = tk.Entry(
+            dialog, bd=0, relief="flat",
+            bg=C_WHITE, fg=C_TEXT,
+            font=("Baghdad", 18),
+            insertbackground=C_TEXT,
+            highlightthickness=0
+        )
+        default_end = self._custom_end or datetime.now().strftime("%d/%m/%Y")
+        end_entry.insert(0, default_end)
+        end_entry.place(
+            x=box2_x1 + 20,
+            y=(box2_y1 + box2_y2) // 2 - 12,
+            width=box2_x2 - box2_x1 - 40,
+            height=24
+        )
+
+        # ───── APPLY BUTTON ─────
+        btn_w  = 180
+        btn_h  = 44
+        btn_cx = WIDTH // 2
+        btn_y1 = box2_y2 + 24
+        btn_y2 = btn_y1 + btn_h
+        btn_x1 = btn_cx - btn_w // 2
+        btn_x2 = btn_cx + btn_w // 2
+
+        _round_rect(cv, btn_x1, btn_y1, btn_x2, btn_y2,
+                    radius=btn_h // 2, fill=C_BTN, outline="",
+                    tags="apply_btn")
+
+        cv.create_text(btn_cx, (btn_y1 + btn_y2) // 2,
+                       text="Apply", fill=C_WHITE,
+                       font=("Arial Rounded MT Bold", 18, "bold"),
+                       tags="apply_btn")
+
+        def apply(event=None):
+            s = start_entry.get().strip()
+            e = end_entry.get().strip()
             try:
                 if s:
                     datetime.strptime(s, "%d/%m/%Y")
                 if e:
                     datetime.strptime(e, "%d/%m/%Y")
             except ValueError:
-                err_var.set("Invalid date format. Use DD/MM/YYYY.")
+                from tkinter import messagebox
+                messagebox.showerror("Error", "Invalid date format. Use DD/MM/YYYY.", parent=dialog)
                 return
             if not s or not e:
-                err_var.set("Please enter both start and end dates.")
+                from tkinter import messagebox
+                messagebox.showerror("Error", "Please enter both start and end dates.", parent=dialog)
                 return
             self._custom_start = s
             self._custom_end = e
             dialog.destroy()
             self._switch_report_tab("Custom")
 
-        btn_frame = tk.Frame(dialog, bg="#FFFFFF")
-        btn_frame.pack(fill="x", padx=pad, pady=(5, pad))
-        tk.Button(btn_frame, text="Cancel", font=("Arial", 11),
-                  command=dialog.destroy, bg="#E0D8D0", padx=15).pack(side="left")
-        tk.Button(btn_frame, text="Apply", font=("Arial", 11, "bold"),
-                  command=apply, bg="#8BB553", fg="white", padx=20).pack(side="right")
+        cv.tag_bind("apply_btn", "<Button-1>", apply)
+        cv.tag_bind("apply_btn", "<Enter>", lambda e: cv.config(cursor="hand2"))
+        cv.tag_bind("apply_btn", "<Leave>", lambda e: cv.config(cursor=""))
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
-        start_et.focus_set()
-        start_et.bind("<Return>", lambda e: end_et.focus_set())
-        end_et.bind("<Return>", lambda e: apply())
+        start_entry.focus_set()
+        start_entry.bind("<Return>", lambda e: end_entry.focus_set())
+        end_entry.bind("<Return>", apply)
 
     def _switch_report_tab(self, tab_name):
         self._active_tab = tab_name

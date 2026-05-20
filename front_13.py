@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login
 
 
 class EmployeeDashboardBackend:
@@ -41,8 +42,10 @@ class EmployeeDashboardBackend:
     def _number(value):
         if value is None:
             return "0"
-        number = float(value)
-        return f"{number:g}"
+        try:
+            return str(int(float(value)))
+        except (ValueError, TypeError):
+            return "0"
 
     def _active_where(self, alias=""):
         prefix = f"{alias}." if alias else ""
@@ -145,6 +148,22 @@ class EmployeeDashboardBackend:
             values[label] = self._money(row.get("salary"))
         return values
 
+    def is_employee_clocked_in(self, employee_id):
+        if not employee_id:
+            return False
+        row = self.db.fetch_one(
+            """
+            SELECT attendance_id
+            FROM attendance
+            WHERE employee_id = %s
+              AND work_date = CURDATE()
+              AND check_out IS NULL
+            LIMIT 1
+            """,
+            (employee_id,),
+        )
+        return row is not None
+
     def get_data(self):
         try:
             employee = self.get_employee()
@@ -152,6 +171,7 @@ class EmployeeDashboardBackend:
                 return self.fallback_data()
 
             employee_id = employee["employee_id"]
+            is_clocked_in = self.is_employee_clocked_in(employee_id)
             return {
                 "employee_id": employee_id,
                 "name": employee.get("full_name") or "-",
@@ -160,6 +180,7 @@ class EmployeeDashboardBackend:
                 "summary": self.get_attendance_summary(employee_id),
                 "attendance": self.get_attendance_history(employee_id),
                 "salary": self.get_salary_values(employee_id),
+                "is_clocked_in": is_clocked_in,
             }
         except Exception as exc:
             print(f"Employee dashboard backend error: {exc}")
@@ -174,6 +195,7 @@ class EmployeeDashboardBackend:
             "summary": {"working_days": 0, "total_hours": "0"},
             "attendance": [],
             "salary": {"Day": "0đ", "Week": "0đ", "Month": "0đ"},
+            "is_clocked_in": False,
         }
 
     def clock_in_or_out(self, employee_id):
@@ -342,10 +364,14 @@ class StaffDashboard(tk.Tk):
         item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 6 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV,
-                           fill=self.C_WHITE if i == 6 else self.C_TEXT, anchor="w")
+                           fill=self.C_WHITE if i == 6 else self.C_TEXT,
+                           anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Staff Dashboard")
             y += item_h + gap
 
         # Turtle icon
@@ -375,7 +401,7 @@ class StaffDashboard(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # ─────────────────────────── IMAGE HELPER ───────────────────────
     def create_rounded_image(self, image_path, width, height, radius):
@@ -426,10 +452,15 @@ class StaffDashboard(tk.Tk):
         ci_x1 = ci_x2 - ci_w
         ci_y1 = 31 + y
         ci_y2 = ci_y1 + ci_h
+        
+        is_clocked_in = self.staff_data.get("is_clocked_in", False)
+        btn_text = "Clock out" if is_clocked_in else "Clock in"
+        btn_bg = "#A24E4E" if is_clocked_in else self.C_CLOCKIN_BG
+        
         _round_rect(cv, ci_x1, ci_y1, ci_x2, ci_y2,
-                    radius=ci_h // 2, fill=self.C_CLOCKIN_BG, tags="clockin")
+                    radius=ci_h // 2, fill=btn_bg, tags="clockin")
         cv.create_text((ci_x1 + ci_x2) // 2, (ci_y1 + ci_y2) // 2,
-                       text="Clock in", font=self.F_CLOCKIN_BTN,
+                       text=btn_text, font=self.F_CLOCKIN_BTN,
                        fill=self.C_WHITE, tags="clockin")
         cv.tag_bind("clockin", "<Button-1>", self._clock_in_or_out)
         cv.tag_bind("clockin", "<Enter>", lambda e: cv.config(cursor="hand2"))
@@ -593,8 +624,7 @@ class StaffDashboard(tk.Tk):
 
     def _clock_in_or_out(self, event=None):
         try:
-            message = self.backend.clock_in_or_out(self.staff_data.get("employee_id"))
-            messagebox.showinfo("Attendance saved", message, parent=self)
+            self.backend.clock_in_or_out(self.staff_data.get("employee_id"))
             self._refresh_content()
         except Exception as exc:
             messagebox.showerror("Attendance failed", str(exc), parent=self)

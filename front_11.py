@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
@@ -6,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login, open_popup, switch_to
 
 
 class StaffBackend:
@@ -84,8 +86,9 @@ class StaffBackend:
         for row in rows or []:
             penalty = int(row.get("month_penalty") or 0)
             role = row.get("role")
-            chip = "+ Penalty" if penalty > 0 else self._role_label(role)
+            chip = self._role_label(role)
             staff.append({
+                "employee_id": row.get("employee_id"),
                 "name": row.get("full_name") or "-",
                 "emp": self._emp_code(row.get("employee_id")),
                 "phone": row.get("phone") or "-",
@@ -269,6 +272,181 @@ def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     return tuple(items)
 
 
+def _round_rect_outline(cv, x1, y1, x2, y2, radius=20, color="#D7D0CB", lw=1):
+    d = 2 * radius
+    cv.create_arc(x1,   y1,   x1+d, y1+d, start=90,  extent=90,  style=tk.ARC, outline=color, width=lw)
+    cv.create_arc(x2-d, y1,   x2,   y1+d, start=0,   extent=90,  style=tk.ARC, outline=color, width=lw)
+    cv.create_arc(x2-d, y2-d, x2,   y2,   start=270, extent=90,  style=tk.ARC, outline=color, width=lw)
+    cv.create_arc(x1,   y2-d, x1+d, y2,   start=180, extent=90,  style=tk.ARC, outline=color, width=lw)
+    cv.create_line(x1+radius, y1,   x2-radius, y1,   fill=color, width=lw)
+    cv.create_line(x2,        y1+radius, x2,   y2-radius, fill=color, width=lw)
+    cv.create_line(x1+radius, y2,   x2-radius, y2,   fill=color, width=lw)
+    cv.create_line(x1,        y1+radius, x1,   y2-radius, fill=color, width=lw)
+
+
+class PenaltyPopup(tk.Toplevel):
+    def __init__(self, parent, employee_id, emp_name, db, callback):
+        super().__init__(parent)
+        self.employee_id = employee_id
+        self.emp_name = emp_name
+        self.db = db
+        self.callback = callback
+
+        # ===== WINDOW (Thu nhỏ vừa vặn) =====
+        WIDTH  = 540
+        HEIGHT = 380
+
+        self.title("Add Penalty")
+        self.geometry(f"{WIDTH}x{HEIGHT}")
+        self.configure(bg="#A8D3CF")
+        self.resizable(False, False)
+
+        # Center on screen relative to parent
+        parent_x = parent.winfo_x()
+        parent_y = parent.winfo_y()
+        parent_w = parent.winfo_width()
+        parent_h = parent.winfo_height()
+        x = parent_x + (parent_w - WIDTH) // 2
+        y = parent_y + (parent_h - HEIGHT) // 2
+        self.geometry(f"{WIDTH}x{HEIGHT}+{x}+{y}")
+        self.transient(parent)
+        self.grab_set()
+
+        # ===== COLORS =====
+        C_BG     = "#A8D3CF"
+        C_WHITE  = "#FFFFFF"
+        C_TEXT   = "#4A3525"
+        C_BORDER = "#D7D0CB"
+        C_PLACE  = "#B6AEA9"
+        C_BTN    = "#68BBB2"
+
+        # ===== CANVAS =====
+        cv = tk.Canvas(self, width=WIDTH, height=HEIGHT,
+                       bg=C_BG, highlightthickness=0)
+        cv.pack(fill="both", expand=True)
+
+        # ===== CARD =====
+        PAD   = 15          # margin around card
+        CX1   = PAD
+        CY1   = PAD
+        CX2   = WIDTH  - PAD
+        CY2   = HEIGHT - PAD
+
+        _round_rect(cv, CX1, CY1, CX2, CY2, radius=28,
+                    fill=C_WHITE, outline="")
+
+        IP = 35             # left/right inner padding
+
+        # ───── TITLE ─────
+        title_y = CY1 + 38
+        cv.create_text(CX1 + IP, title_y,
+                       text="Add Penalty", anchor="w",
+                       fill=C_TEXT,
+                       font=("Arial Rounded MT Bold", 18, "bold"))
+
+        # Divider
+        div_y = title_y + 24
+        cv.create_line(CX1 + IP, div_y, CX2 - IP, div_y,
+                       fill="#DCD6D2", width=1)
+
+        # ───── EMPLOYEE INFO ─────
+        name_y = div_y + 26
+        cv.create_text(CX1 + IP, name_y,
+                       text=f"Employee: {self.emp_name}", anchor="w",
+                       fill="#7A685F",
+                       font=("Baghdad", 16))
+
+        # ───── AMOUNT LABEL ─────
+        lbl_y = name_y + 36
+        cv.create_text(CX1 + IP, lbl_y,
+                       text="Amount (VND)", anchor="w",
+                       fill=C_TEXT,
+                       font=("Baghdad", 18, "bold"))
+
+        # Amount input box
+        box_y1 = lbl_y + 12
+        box_y2 = box_y1 + 44
+        box_x1 = CX1 + IP - 4
+        box_x2 = CX2 - IP + 4
+
+        _round_rect(cv, box_x1, box_y1, box_x2, box_y2,
+                    radius=22, fill=C_WHITE, outline="")
+        _round_rect_outline(cv, box_x1, box_y1, box_x2, box_y2,
+                            radius=22, color=C_BORDER, lw=1)
+
+        self.amount_entry = tk.Entry(
+            self, bd=0, relief="flat",
+            bg=C_WHITE, fg=C_TEXT,
+            font=("Baghdad", 18),
+            insertbackground=C_TEXT,
+            highlightthickness=0
+        )
+        self.amount_entry.insert(0, "50000")
+        self.amount_entry.place(
+            x=box_x1 + 20,
+            y=(box_y1 + box_y2) // 2 - 12,
+            width=box_x2 - box_x1 - 40,
+            height=24
+        )
+        self.amount_entry.focus_set()
+
+        # ───── SAVE BUTTON ─────
+        btn_w  = 180
+        btn_h  = 44
+        btn_cx = WIDTH // 2
+        btn_y1 = box_y2 + 28
+        btn_y2 = btn_y1 + btn_h
+        btn_x1 = btn_cx - btn_w // 2
+        btn_x2 = btn_cx + btn_w // 2
+
+        _round_rect(cv, btn_x1, btn_y1, btn_x2, btn_y2,
+                    radius=btn_h // 2, fill=C_BTN, outline="",
+                    tags="save_btn")
+
+        cv.create_text(btn_cx, (btn_y1 + btn_y2) // 2,
+                       text="Add Penalty", fill=C_WHITE,
+                       font=("Arial Rounded MT Bold", 18, "bold"),
+                       tags="save_btn")
+
+        cv.tag_bind("save_btn", "<Button-1>", self.save)
+        cv.tag_bind("save_btn", "<Enter>", lambda e: cv.config(cursor="hand2"))
+        cv.tag_bind("save_btn", "<Leave>", lambda e: cv.config(cursor=""))
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def save(self, event=None):
+        val_str = self.amount_entry.get().strip()
+        try:
+            val = int(val_str)
+            if val <= 0:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid positive number for the penalty amount.", parent=self)
+            return
+
+        try:
+            # First check if attendance exists for today
+            exists = self.db.fetch_one(
+                "SELECT attendance_id FROM attendance WHERE employee_id = %s AND work_date = CURDATE()",
+                (self.employee_id,)
+            )
+            if exists:
+                self.db.execute(
+                    "UPDATE attendance SET penalty = COALESCE(penalty, 0) + %s WHERE employee_id = %s AND work_date = CURDATE()",
+                    (val, self.employee_id)
+                )
+            else:
+                self.db.execute(
+                    "INSERT INTO attendance (employee_id, work_date, penalty, clock_in, clock_out) VALUES (%s, CURDATE(), %s, '09:00:00', '17:00:00')",
+                    (self.employee_id, val)
+                )
+
+            messagebox.showinfo("Success", f"Successfully added {val:,}đ penalty for {self.emp_name}!", parent=self)
+            self.destroy()
+            self.callback()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add penalty: {e}", parent=self)
+
+
 class StaffPage(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -388,10 +566,13 @@ class StaffPage(tk.Tk):
 
         for i, item in enumerate(nav_items):
             # "Staff" is index 6 → active
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 6 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item,
-                           font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+                           font=self.F_NAV, fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Staff")
             y += item_h + gap
 
         # Turtle icon
@@ -421,7 +602,7 @@ class StaffPage(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # ─────────────────── HELPERS ───────────────────────────
     def create_rounded_image(self, image_path, width, height, radius, crop_align="center"):
@@ -463,15 +644,29 @@ class StaffPage(tk.Tk):
         result.paste(img, (0, 0), mask=mask)
         return ImageTk.PhotoImage(result)
 
-    def _draw_chip(self, cv, cx, cy, text, bg, fg, font=None):
+    def _draw_chip(self, cv, cx, cy, text, bg, fg, font=None, tags=None):
         if font is None:
             font = self.F_CHIP
         tw = len(text) * 9 + 24
         th = 26
         x1, y1 = cx - tw // 2, cy - th // 2
         x2, y2 = cx + tw // 2, cy + th // 2
-        _round_rect(cv, x1, y1, x2, y2, radius=th // 2, fill=bg, outline="")
-        cv.create_text(cx, cy, text=text, font=font, fill=fg)
+        kw = {"tags": tags} if tags else {}
+        _round_rect(cv, x1, y1, x2, y2, radius=th // 2, fill=bg, outline="", **kw)
+        cv.create_text(cx, cy, text=text, font=font, fill=fg, **kw)
+
+    def show_penalty_dialog(self, employee_id, emp_name):
+        PenaltyPopup(self, employee_id, emp_name, self.backend.db, self.refresh_ui)
+
+    def refresh_ui(self):
+        self.staff_data = self.backend.get_data()
+        self.canvas.delete("all")
+        self.draw_content()
+        self.canvas.scale("all", 0, 0, self._s, self._s)
+        self.canvas.update_idletasks()
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(50 * self._s)))
 
     # ─────────────────── MAIN CONTENT ──────────────────────
     def draw_content(self):
@@ -492,7 +687,10 @@ class StaffPage(tk.Tk):
         cv.create_text(hbar_x1 + 30, (hbar_y1 + hbar_y2) // 2,
                        text="Staff", font=self.F_HEADER_TAB, fill=self.C_TEXT, anchor="w")
         cv.create_text(hbar_x1 + 100, (hbar_y1 + hbar_y2) // 2,
-                       text="Manager", font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT, anchor="w")
+                       text="Manager", font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT,
+                       anchor="w", tags="staff_dashboard_link")
+        bind_click(cv, "staff_dashboard_link",
+                   lambda _e: switch_to(self, "Staff Dashboard", "Staff"))
         today_str = datetime.now().strftime("%d/%m/%Y")
         cv.create_text(hbar_x1 + 210, (hbar_y1 + hbar_y2) // 2,
                        text=today_str, font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT, anchor="w")
@@ -505,9 +703,12 @@ class StaffPage(tk.Tk):
         nbtn_y1 = nbtn_cy - nbtn_h // 2
         nbtn_y2 = nbtn_cy + nbtn_h // 2
         _round_rect(cv, nbtn_x1, nbtn_y1, nbtn_x2, nbtn_y2,
-                    radius=nbtn_h // 2, fill=self.C_DARK_BTN, outline="")
+                    radius=nbtn_h // 2, fill=self.C_DARK_BTN, outline="",
+                    tags="new_staff_btn")
         cv.create_text((nbtn_x1 + nbtn_x2) // 2, nbtn_cy,
-                       text="+ New staff", font=self.F_NEW_BTN, fill=self.C_WHITE)
+                       text="+ New staff", font=self.F_NEW_BTN, fill=self.C_WHITE,
+                       tags="new_staff_btn")
+        bind_click(cv, "new_staff_btn", lambda _e: open_popup("New Staff"))
 
         # ══════════════════════════════════════════════════
         # 2.  TITLE "Thu Lan"
@@ -651,11 +852,25 @@ class StaffPage(tk.Tk):
                            text=st["phone"],
                            font=self.F_STAFF_INFO, fill=self.C_TEXT_LIGHT, anchor="w")
 
-            # Chip
-            chip_bg = self.C_PINK_BG if st.get("has_penalty") else self.C_GREEN_BG
-            chip_fg = self.C_PINK_FG if st.get("has_penalty") else self.C_GREEN_FG
-            self._draw_chip(cv, chip_x_right, cy,
-                            st["chip"], chip_bg, chip_fg, self.F_CHIP_SMALL)
+            # 1. Role Chip (always green, aligned top right)
+            self._draw_chip(cv, chip_x_right, cy - 12,
+                            st["chip"], self.C_GREEN_BG, self.C_GREEN_FG, self.F_CHIP_SMALL)
+
+            # 2. Add Penalty button/chip (placed under the role tag)
+            if st.get("employee_id"):
+                penalty_tag = f"penalty_btn_{st['employee_id']}"
+                
+                # Soft pink background if they already have a penalty, otherwise nice soft gray
+                p_bg = self.C_PINK_BG if st.get("has_penalty") else "#EFEFEF"
+                p_fg = self.C_PINK_FG if st.get("has_penalty") else self.C_TEXT_LIGHT
+                
+                self._draw_chip(cv, chip_x_right, cy + 16,
+                                "+ Penalty", p_bg, p_fg, self.F_CHIP_SMALL, tags=penalty_tag)
+                                
+                # Bind the click handler to trigger the penalty dialog
+                cv.tag_bind(penalty_tag, "<Button-1>", lambda _e, eid=st["employee_id"], name=st["name"]: self.show_penalty_dialog(eid, name))
+                cv.tag_bind(penalty_tag, "<Enter>", lambda _e: cv.config(cursor="hand2"))
+                cv.tag_bind(penalty_tag, "<Leave>", lambda _e: cv.config(cursor=""))
 
             # Divider (not after last)
             if ri < len(staff_list) - 1:

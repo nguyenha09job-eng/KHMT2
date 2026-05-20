@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login, switch_to
 
 
 def format_large_number(num):
@@ -428,14 +429,16 @@ class PetDashboard(tk.Tk):
         gap = 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             if i == 0:
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill=self.C_ACTIVE, outline="")
+                            radius=item_r, fill=self.C_ACTIVE, outline="", tags=nav_tag)
             else:
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill="#efefef", outline="")
+                            radius=item_r, fill="#efefef", outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item,
-                           font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+                           font=self.F_NAV, fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Dashboard")
             y += item_h + gap
 
         # -- Rabbit image above logout --
@@ -490,10 +493,10 @@ class PetDashboard(tk.Tk):
                        font=self.F_NAV, fill="#FFFFFF",
                        tags="logout_btn")
 
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.logout())
+        bind_click(cv, "logout_btn", lambda e: self.logout())
 
     def logout(self):
-        self.destroy()
+        logout_to_login(self)
 
     def _set_service_filter(self, tag):
         """Update Today's Services filter and redraw only that table."""
@@ -613,8 +616,11 @@ class PetDashboard(tk.Tk):
         cv.create_text(460+dx, 52+y_off, text=today_str, font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # New Booking button
-        _round_rect(cv, 960+dx, 30+y_off, 1150+dx, 70+y_off, radius=20, fill=self.C_TEXT, outline="")
-        cv.create_text(1045+dx, 50+y_off, text= "+ New Booking", font=self.F_TITLE, fill=self.C_WHITE)
+        _round_rect(cv, 960+dx, 30+y_off, 1150+dx, 70+y_off, radius=20,
+                    fill=self.C_TEXT, outline="", tags="new_booking_btn")
+        cv.create_text(1045+dx, 50+y_off, text= "+ New Booking",
+                       font=self.F_TITLE, fill=self.C_WHITE, tags="new_booking_btn")
+        bind_click(cv, "new_booking_btn", lambda e: switch_to(self, "Booking", "Dashboard"))
 
         # =========================
         # STAT CARDS (y: 90 → 355)

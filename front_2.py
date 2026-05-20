@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
     """Draw a rounded rectangle using arcs for true rounded corners."""
@@ -396,14 +397,16 @@ class CareViewDashboard(tk.Tk):
         gap = 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             if i == 1:  # Care View active
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill=self.C_ACTIVE, outline="")
+                            radius=item_r, fill=self.C_ACTIVE, outline="", tags=nav_tag)
             else:
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill="#efefef", outline="")
+                            radius=item_r, fill="#efefef", outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item,
-                           font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+                           font=self.F_NAV, fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Care View")
             y += item_h + gap
 
         # Rabbit image
@@ -457,7 +460,7 @@ class CareViewDashboard(tk.Tk):
         cv.create_text(btn_cx, btn_cy, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF",
                        tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # =====================================================
     # ROUNDED IMAGE HELPER

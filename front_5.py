@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login
 
 
 def _round_rect(cv, x1, y1, x2, y2, radius=25, **kwargs):
@@ -275,10 +276,14 @@ class RoomsDashboard(tk.Tk):
         item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 3 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV,
-                           fill=self.C_WHITE if i == 3 else self.C_TEXT, anchor="w")
+                           fill=self.C_WHITE if i == 3 else self.C_TEXT,
+                           anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Rooms")
             y += item_h + gap
 
         # Decorative animal icon in sidebar
@@ -308,7 +313,7 @@ class RoomsDashboard(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # ─────────────────────────── IMAGE HELPER ───────────────────────
     def create_rounded_image(self, image_path, width, height, radius):
@@ -475,13 +480,13 @@ class RoomsDashboard(tk.Tk):
         # Highlight active status filter border
         if self.status_filter == "Occupied":
             _round_outline(cv, occ_x1 - 1, occ_y1 - 1, occ_x1 + chip_w + 1, occ_y1 + chip_h + 1,
-                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
+                           radius=chip_r + 1, color="#A89F95", width=3, tags="status_border")
         elif self.status_filter == "Available":
             _round_outline(cv, occ_x1 - 1, avl_y1 - 1, occ_x1 + chip_w + 1, avl_y1 + chip_h + 1,
-                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
+                           radius=chip_r + 1, color="#A89F95", width=3, tags="status_border")
         elif self.status_filter == "Cleaning":
             _round_outline(cv, occ_x1 - 1, clean_y1 - 1, occ_x1 + chip_w + 1, clean_y1 + chip_h + 1,
-                           radius=chip_r + 1, color=self.C_TEXT, width=3, tags="status_border")
+                           radius=chip_r + 1, color="#A89F95", width=3, tags="status_border")
 
         # ── SEARCH BAR ──
         s_y1, s_y2 = 216 + y, 252 + y

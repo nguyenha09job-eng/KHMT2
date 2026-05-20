@@ -3,10 +3,11 @@ from tkinter import messagebox
 from PIL import Image, ImageTk, ImageDraw
 import os
 import sys
-from datetime import date
+from datetime import datetime, date
 from decimal import Decimal
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login
 
 
 class BillingBackend:
@@ -118,10 +119,18 @@ class BillingBackend:
         if check_in and check_out:
             nights = max(1, (check_out.date() - check_in.date()).days)
 
+        district = row.get("district")
+        transport_fee = 0
+        if district and district != "-":
+            if "7" in str(district):
+                transport_fee = 200000
+            else:
+                transport_fee = 100000
+
         room_total = int(row.get("room_price") or 0) * nights
         service_total = sum(int(s.get("total_price") or 0) for s in services)
         discount = int(row.get("discount_amount") or 0)
-        computed_total = max(room_total + service_total - discount, 0)
+        computed_total = max(room_total + service_total + transport_fee - discount, 0)
         total = int(row.get("total_amount") or computed_total)
         method = self._title(row.get("method_name"), "Card")
         method_key = self._method_key(row.get("method_name"))
@@ -458,6 +467,13 @@ class BillingDashboard(tk.Tk):
             self.canvas.configure(scrollregion=(bbox[0], 0, bbox[2], bbox[3] + int(60 * self._s)))
 
     def _redraw_billing_page(self):
+        curr_pos = tk.END
+        if self.search_entry:
+            try:
+                curr_pos = self.search_entry.index(tk.INSERT)
+            except Exception:
+                pass
+
         if self.search_entry is not None:
             self.search_entry.destroy()
             self.search_entry = None
@@ -465,6 +481,13 @@ class BillingDashboard(tk.Tk):
         self.draw_billing_page()
         self.canvas.scale("all", 0, 0, self._s, self._s)
         self._refresh_scrollregion()
+
+        if self.search_entry:
+            self.search_entry.focus_set()
+            try:
+                self.search_entry.icursor(curr_pos)
+            except Exception:
+                pass
 
     def reload_billing_data(self):
         try:
@@ -526,14 +549,16 @@ class BillingDashboard(tk.Tk):
         gap = 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             if i == 5:  # Billing active
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill=self.C_ACTIVE, outline="")
+                            radius=item_r, fill=self.C_ACTIVE, outline="", tags=nav_tag)
             else:
                 _round_rect(cv, pad_x, y, right_x, y + item_h,
-                            radius=item_r, fill="#efefef", outline="")
+                            radius=item_r, fill="#efefef", outline="", tags=nav_tag)
             cv.create_text(pad_x + 20, y + 20, text=item,
-                           font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+                           font=self.F_NAV, fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Billing")
             y += item_h + gap
 
         # Duck image (Identical to front_2.py crop & round logic)
@@ -587,7 +612,7 @@ class BillingDashboard(tk.Tk):
         cv.create_text(btn_cx, btn_cy, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF",
                        tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # =====================================================
     # ROUNDED IMAGE HELPER
@@ -665,6 +690,9 @@ class BillingDashboard(tk.Tk):
         hdr_y2 = 70 + y_off
         _round_rect(cv, L_PAD, hdr_y1, R_PAD, hdr_y2, radius=20, fill=self.C_WHITE, outline="")
         cv.create_text(L_PAD + 25, (hdr_y1 + hdr_y2)/2, text="Billing", font=self.F_BOLD, fill=self.C_TEXT, anchor="w")
+        
+        today_str = datetime.now().strftime("%A, %d/%m/%Y")
+        cv.create_text(L_PAD + 130, (hdr_y1 + hdr_y2)/2 + 1, text=today_str, font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # -------------------------------------------------
         # 2. MAIN TITLE & DOG BANNER ROW
@@ -678,7 +706,7 @@ class BillingDashboard(tk.Tk):
         # Dog Banner
         _dir = os.path.dirname(__file__)
         banner_path = os.path.join(_dir, "image", "billing.jpg")
-        banner_w = 440
+        banner_w = 550
         banner_h = 130
         banner_tk = self.create_rounded_image(banner_path, banner_w, banner_h, radius=24, crop_y=0.3)
         self.images.append(banner_tk)
@@ -705,13 +733,13 @@ class BillingDashboard(tk.Tk):
             L_PAD + 20,
             search_y + 22,
             window=self.search_entry,
-            width=int((R_PAD - L_PAD - 80) * self._s),
-            height=int(30 * self._s),
+            width=R_PAD - L_PAD - 80,
+            height=30,
             anchor="w",
         )
         if not self.search_var.get():
             cv.create_text(L_PAD + 22, search_y + 22,
-                           text="Search by name, phone number, pet name, or booking ID",
+                           text="Search by name, phone number, or pet name",
                            font=self.F_REGULAR, fill="#A5A5A5", anchor="w")
         
         # Simple search loop icon
@@ -783,13 +811,36 @@ class BillingDashboard(tk.Tk):
                                font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
                 y_item += 35
 
-            cv.create_text(L_PAD + 25, y_item, text=f"Customer phone ({focus['phone']})",
+            # Calculate transport fee
+            transport_fee = 0
+            district_str = str(focus.get("district") or "-").strip()
+            if district_str and district_str != "-":
+                if "7" in district_str:
+                    transport_fee = 200000
+                else:
+                    transport_fee = 100000
+
+            # Render Transport
+            cv.create_text(L_PAD + 25, y_item, text=f"Transport ({district_str})",
                            font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
-            cv.create_text(R_PAD - 25, y_item, text=focus["district"],
-                           font=self.F_REGULAR, fill=self.C_TEXT_LIGHT, anchor="e")
+            cv.create_text(R_PAD - 25, y_item, text=self._money(transport_fee),
+                           font=self.F_PRICE, fill=self.C_TEXT, anchor="e")
 
             y_item += 35
-            cv.create_text(L_PAD + 25, y_item, text="Discount",
+
+            # Calculate discount label with percentage if active
+            discount_label = "VIP Discount"
+            if focus.get("discount", 0) > 0:
+                subtotal = focus.get("room_total", 0) + focus.get("service_total", 0) + transport_fee
+                if subtotal > 0:
+                    pct = round((focus["discount"] / subtotal) * 100)
+                    discount_label = f"VIP Discount ({pct}%)"
+                else:
+                    discount_label = "VIP Discount"
+            else:
+                discount_label = "VIP Discount (0%)"
+
+            cv.create_text(L_PAD + 25, y_item, text=discount_label,
                            font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")
             cv.create_text(R_PAD - 25, y_item, text=f"-{self._money(focus['discount'])}",
                            font=self.F_PRICE, fill=self.C_TEXT, anchor="e")

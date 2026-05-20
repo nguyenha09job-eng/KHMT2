@@ -8,6 +8,7 @@ from decimal import Decimal
 import unicodedata
 
 from database import DatabaseConnection
+from navigation import bind_click, bind_nav_item, logout_to_login, switch_to
 
 
 _HCMC_DISTRICTS = [
@@ -470,20 +471,22 @@ class BookingBackend:
                 service = cursor.fetchone()
                 if not service:
                     raise ValueError("Service not found in service catalog")
+                quantity = int(data.get("service_quantity", 1))
                 cursor.execute(
                     """
                     INSERT INTO services (
                         booking_id, pet_id, service_type_id, unit_price,
                         quantity, total_price, service_date, status
                     )
-                    VALUES (%s, %s, %s, %s, 1, %s, DATE(%s), 'pending')
+                    VALUES (%s, %s, %s, %s, %s, %s, DATE(%s), 'pending')
                     """,
                     (
                         booking_id,
                         pet_id,
                         service["service_type_id"],
                         service["base_price"],
-                        service["base_price"],
+                        quantity,
+                        service["base_price"] * quantity,
                         check_in,
                     ),
                 )
@@ -503,6 +506,34 @@ class BookingBackend:
         finally:
             cursor.close()
             conn.close()
+
+    def get_room_type_price(self, room_type_name):
+        row = self.db.fetch_one(
+            "SELECT price_per_night FROM room_types WHERE LOWER(type_name) = LOWER(%s) LIMIT 1",
+            (room_type_name,),
+        )
+        return int(row["price_per_night"]) if row else None
+
+    def get_service_price(self, service_type_name):
+        row = self.db.fetch_one(
+            "SELECT base_price FROM service_catalog WHERE LOWER(service_type) = LOWER(%s) AND is_active = 1 LIMIT 1",
+            (service_type_name,),
+        )
+        return int(row["base_price"]) if row else None
+
+    def get_available_rooms(self, room_type_name):
+        rows = self.db.fetch_all(
+            """
+            SELECT r.room_id
+            FROM rooms r
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            WHERE LOWER(rt.type_name) = LOWER(%s)
+              AND r.is_active = 1
+            ORDER BY r.room_id
+            """,
+            (room_type_name,),
+        )
+        return [f"R-{int(row['room_id']):02d}" for row in rows] if rows else []
 
 
 class BookingDashboard(tk.Tk):
@@ -559,9 +590,14 @@ class BookingDashboard(tk.Tk):
             "species": tk.StringVar(value="Dog"),
             "gender": tk.StringVar(value="Male"),
             "room_type": tk.StringVar(value="Small Dog Room"),
+            "service": tk.StringVar(value="grooming"),
         }
         self.chip_groups = {}
         self.toggle_vars = {}
+        self._price_label = None
+        self._room_chips = []
+        self._selected_room_var = tk.StringVar(value="")
+        self._room_chips_container = None
 
         # Layout
         main = tk.Frame(self, bg=self.C_BG)
@@ -637,9 +673,13 @@ class BookingDashboard(tk.Tk):
         item_h, item_r, pad_x, right_x, gap = 37, 18, 36, 215, 10
 
         for i, item in enumerate(nav_items):
+            nav_tag = f"nav_{i}"
             fill = self.C_ACTIVE if i == 2 else "#efefef"
-            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r, fill=fill, outline="")
-            cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV, fill=self.C_TEXT, anchor="w")
+            _round_rect(cv, pad_x, y, right_x, y + item_h, radius=item_r,
+                        fill=fill, outline="", tags=nav_tag)
+            cv.create_text(pad_x + 20, y + 20, text=item, font=self.F_NAV,
+                           fill=self.C_TEXT, anchor="w", tags=nav_tag)
+            bind_nav_item(cv, nav_tag, self, item, "Booking")
             y += item_h + gap
 
         # Turtle icon
@@ -670,7 +710,7 @@ class BookingDashboard(tk.Tk):
                     fill=self.C_TEXT, outline="", tags="logout_btn")
         cv.create_text(125, (btn_y1 + btn_y2) / 2, text="Log out",
                        font=self.F_NAV, fill="#FFFFFF", tags="logout_btn")
-        cv.tag_bind("logout_btn", "<Button-1>", lambda e: self.destroy())
+        bind_click(cv, "logout_btn", lambda e: logout_to_login(self))
 
     # =====================================================
     # ROUNDED IMAGE HELPER
@@ -730,8 +770,13 @@ class BookingDashboard(tk.Tk):
                         radius=tg_h//2, fill=self.C_TEXT)
             header_cv.create_text(tx + tw//2, h//2, text="Bookings",
                                   font=self.F_TOGGLE_BTN, fill=self.C_WHITE)
+            _round_rect(header_cv, tx + tw, int(3*s), tx + tw * 2, h - int(3*s),
+                        radius=tg_h//2, fill=self.C_WHITE, tags="history_toggle")
             header_cv.create_text(tx + tw + tw//2, h//2, text="History",
-                                  font=self.F_TOGGLE_BTN, fill=self.C_TEXT)
+                                  font=self.F_TOGGLE_BTN, fill=self.C_TEXT,
+                                  tags="history_toggle")
+            bind_click(header_cv, "history_toggle",
+                       lambda _e: switch_to(self, "Booking History", "Booking"))
         header_cv.bind("<Configure>", _draw_header)
 
         # === QUICK BOOKING TITLE ===
@@ -841,38 +886,61 @@ class BookingDashboard(tk.Tk):
         self._add_section_label(form_frame, "Pets", form_pad)
         row3 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row3.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row3, "Name", "ex: Milo", side=tk.LEFT, expand=True, key="pet_name")
+
+        # Pack rightmost widgets first from the right so they get priority space
+        st_frame = tk.Frame(row3, bg=self.C_CARD_BG)
+        st_frame.pack(side=tk.RIGHT, padx=(int(12*s), 0), anchor="ne")
+        tk.Label(st_frame, text="Sterilization", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+        self._add_toggle(st_frame, key="sterilized")
 
         sp_frame = tk.Frame(row3, bg=self.C_CARD_BG)
-        sp_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
+        sp_frame.pack(side=tk.RIGHT, padx=(int(12*s), 0), anchor="ne")
         tk.Label(sp_frame, text="Species", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
         sp_chips = tk.Frame(sp_frame, bg=self.C_CARD_BG)
         sp_chips.pack(anchor="w")
         for c in ["Dog", "Cat"]:
             self._add_chip(sp_chips, c, group="species")
 
-        st_frame = tk.Frame(row3, bg=self.C_CARD_BG)
-        st_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
-        tk.Label(st_frame, text="Sterilization", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
-        self._add_toggle(st_frame, key="sterilized")
+        # Pack leftmost widgets from the left
+        self._add_labeled_entry(row3, "Name", "ex: Milo", side=tk.LEFT, expand=True, key="pet_name")
 
         row4 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row4.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row4, "Breed", "ex: Poodle", side=tk.LEFT, expand=True, key="breed")
-        self._add_labeled_entry(row4, "Weight (kg)", "ex: 4.5", side=tk.LEFT, key="weight")
+
+        # Pack rightmost widgets first from the right so they get priority space
+        vc_frame = tk.Frame(row4, bg=self.C_CARD_BG)
+        vc_frame.pack(side=tk.RIGHT, padx=(int(12*s), 0), anchor="ne")
+        tk.Label(vc_frame, text="Vaccinated", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+        self._add_toggle(vc_frame, key="vaccinated")
 
         gd_frame = tk.Frame(row4, bg=self.C_CARD_BG)
-        gd_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
+        gd_frame.pack(side=tk.RIGHT, padx=(int(12*s), 0), anchor="ne")
         tk.Label(gd_frame, text="Gender", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
         gd_chips = tk.Frame(gd_frame, bg=self.C_CARD_BG)
         gd_chips.pack(anchor="w")
         for c in ["Male", "Female"]:
             self._add_chip(gd_chips, c, group="gender")
 
-        vc_frame = tk.Frame(row4, bg=self.C_CARD_BG)
-        vc_frame.pack(side=tk.LEFT, padx=(int(12*s), 0))
-        tk.Label(vc_frame, text="Vaccinated", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
-        self._add_toggle(vc_frame, key="vaccinated")
+        # Pack leftmost widgets from the left
+        self._add_labeled_entry(row4, "Breed", "ex: Poodle", side=tk.LEFT, expand=True, key="breed")
+        self._add_labeled_entry(row4, "Weight (kg)", "ex: 4.5", side=tk.LEFT, key="weight")
+        # Weight validation indicator
+        weight_entry = self.entries["weight"]
+        weight_err = tk.Label(weight_entry.master.master, text="giá trị không hợp lệ",
+                              font=self.F_LABEL, bg=self.C_CARD_BG, fg="#E74C3C")
+        def _validate_weight(_event=None):
+            val = weight_entry.get()
+            ph = self.placeholders.get("weight", "")
+            if val == ph or not val.strip():
+                weight_err.pack_forget()
+            else:
+                try:
+                    float(val.replace(",", ".").strip())
+                    weight_err.pack_forget()
+                except ValueError:
+                    weight_err.pack(anchor="w")
+        weight_entry.bind("<KeyRelease>", _validate_weight, add="+")
+        weight_entry.bind("<<Paste>>", _validate_weight, add="+")
 
         for label, key in [
             ("Health condition", "health_condition"),
@@ -887,6 +955,18 @@ class BookingDashboard(tk.Tk):
         self._add_section_label(form_frame, "Booking", form_pad)
         row5 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row5.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
+        # Pack price_f first on the RIGHT so it is guaranteed full width and never cut off
+        price_f = tk.Frame(row5, bg=self.C_CARD_BG)
+        price_f.pack(side=tk.RIGHT, padx=(int(10*s), 0), anchor="ne")
+        tk.Label(price_f, text="Price", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+        pv = tk.Frame(price_f, bg=self.C_CARD_BG)
+        pv.pack(anchor="w")
+        self._price_label = tk.Label(pv, text=self._price_text(), font=self.F_PRICE,
+                                     bg=self.C_CARD_BG, fg="#6BA52F")
+        self._price_label.pack(side=tk.LEFT)
+        tk.Label(pv, text="/night", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(side=tk.LEFT)
+
+        # Pack rt_frame on the LEFT to fill remaining space
         rt_frame = tk.Frame(row5, bg=self.C_CARD_BG)
         rt_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, int(10*s)))
         tk.Label(rt_frame, text="Room type", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
@@ -899,23 +979,119 @@ class BookingDashboard(tk.Tk):
         for chip in ["Large Dog Room", "Cat Room", "Family Room"]:
             self._add_chip(rt_row2, chip, group="room_type")
 
-        price_f = tk.Frame(row5, bg=self.C_CARD_BG)
-        price_f.pack(side=tk.LEFT, padx=(int(10*s), 0))
-        tk.Label(price_f, text="Price", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
-        pv = tk.Frame(price_f, bg=self.C_CARD_BG)
-        pv.pack(anchor="w")
-        tk.Label(pv, text="875,000đ", font=self.F_PRICE, bg=self.C_CARD_BG, fg="#6BA52F").pack(side=tk.LEFT)
-        tk.Label(pv, text="/night", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(side=tk.LEFT)
-
         row6 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row6.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
-        self._add_labeled_entry(row6, "Specific room", "ex: 11", side=tk.LEFT, expand=True, key="room")
-        self._add_labeled_entry(row6, "Service", "ex: grooming", side=tk.LEFT, expand=True, key="service")
+
+        # Pack svc_price_f first on the RIGHT so it is guaranteed full width and never cut off
+        svc_price_f = tk.Frame(row6, bg=self.C_CARD_BG)
+        svc_price_f.pack(side=tk.RIGHT, padx=(int(10*s), 0), anchor="ne")
+        tk.Label(svc_price_f, text="Price / times", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+
+        # Quantity selector row: [-]  Qty  [+]
+        qty_row = tk.Frame(svc_price_f, bg=self.C_CARD_BG)
+        qty_row.pack(anchor="w", pady=(int(2*s), int(4*s)))
+
+        self.service_quantity_var = tk.IntVar(value=1)
+
+        # Helper to change quantity
+        def change_qty(delta):
+            new_qty = self.service_quantity_var.get() + delta
+            if new_qty >= 1:
+                self.service_quantity_var.set(new_qty)
+                qty_val_lbl.config(text=str(new_qty))
+                self._update_service_price_display()
+
+        # Draw elegant circular buttons for - and +
+        btn_dec = tk.Canvas(qty_row, width=int(24*s), height=int(24*s), bg=self.C_CARD_BG, highlightthickness=0)
+        btn_dec.pack(side=tk.LEFT)
+        def draw_dec(event=None):
+            btn_dec.delete("all")
+            _round_rect(btn_dec, 0, 0, int(24*s), int(24*s), radius=int(12*s), fill="#F2F2F2")
+            btn_dec.create_text(int(12*s), int(12*s), text="-", font=("Arial", int(14*s), "bold"), fill=self.C_TEXT)
+        draw_dec()
+        btn_dec.bind("<Button-1>", lambda e: change_qty(-1))
+
+        qty_val_lbl = tk.Label(qty_row, text="1", font=self.F_BTN, bg=self.C_CARD_BG, fg=self.C_TEXT, width=3)
+        qty_val_lbl.pack(side=tk.LEFT, padx=int(4*s))
+
+        btn_inc = tk.Canvas(qty_row, width=int(24*s), height=int(24*s), bg=self.C_CARD_BG, highlightthickness=0)
+        btn_inc.pack(side=tk.LEFT)
+        def draw_inc(event=None):
+            btn_inc.delete("all")
+            _round_rect(btn_inc, 0, 0, int(24*s), int(24*s), radius=int(12*s), fill="#F2F2F2")
+            btn_inc.create_text(int(12*s), int(12*s), text="+", font=("Arial", int(14*s), "bold"), fill=self.C_TEXT)
+        draw_inc()
+        btn_inc.bind("<Button-1>", lambda e: change_qty(1))
+
+        # Price Display row below the quantity selector
+        pv_svc = tk.Frame(svc_price_f, bg=self.C_CARD_BG)
+        pv_svc.pack(anchor="w")
+        self._service_price_label = tk.Label(pv_svc, text="", font=self.F_PRICE,
+                                             bg=self.C_CARD_BG, fg="#6BA52F")
+        self._service_price_label.pack(side=tk.LEFT)
+        tk.Label(pv_svc, text=" total", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(side=tk.LEFT)
+
+        # Pack svc_frame on the LEFT to fill remaining space
+        svc_frame = tk.Frame(row6, bg=self.C_CARD_BG)
+        svc_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, int(10*s)))
+        tk.Label(svc_frame, text="Service", font=self.F_LABEL, bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w")
+        svc_row1 = tk.Frame(svc_frame, bg=self.C_CARD_BG)
+        svc_row1.pack(anchor="w", pady=(int(4*s), 0))
+        for chip in ["Grooming", "Daycare", "Pickup"]:
+            self._add_chip(svc_row1, chip, group="service", value=chip.lower())
+        svc_row2 = tk.Frame(svc_frame, bg=self.C_CARD_BG)
+        svc_row2.pack(anchor="w", pady=(int(3*s), 0))
+        for chip in ["Dropoff", "Swimming", "Walk"]:
+            self._add_chip(svc_row2, chip, group="service", value=chip.lower())
+
+        # Room chips waterfall container (hidden initially, shown when room type selected)
+        self._room_chips_container = tk.Frame(form_frame, bg=self.C_CARD_BG, highlightthickness=0)
+        # Add Specific room header label so it hides/shows dynamically along with the chips
+        tk.Label(self._room_chips_container, text="Specific room", font=self.F_LABEL,
+                 bg=self.C_CARD_BG, fg=self.C_TEXT).pack(anchor="w", pady=(0, int(4*s)))
+        self._room_chips_inner = tk.Frame(self._room_chips_container, bg=self.C_CARD_BG)
+        self._room_chips_inner.pack(fill=tk.X, padx=0, pady=(0, int(6*s)))
+
+        # Trace room_type changes → update price & available rooms
+        self.choice_vars["room_type"].trace_add("write", self._on_room_type_changed)
+        self._on_room_type_changed()
+
+        # Trace service changes → update service price display
+        self.choice_vars["service"].trace_add("write", self._on_service_changed)
+        self._update_service_price_display()
 
         row7 = tk.Frame(form_frame, bg=self.C_CARD_BG)
         row7.pack(fill=tk.X, padx=form_pad, pady=(0, int(10*s)))
         self._add_labeled_entry(row7, "Check in", "2026-05-20", side=tk.LEFT, expand=True, key="check_in")
         self._add_labeled_entry(row7, "Check out", "2026-05-23", side=tk.LEFT, expand=True, key="check_out")
+        # Date validation indicator
+        ci_entry = self.entries["check_in"]
+        co_entry = self.entries["check_out"]
+        self._date_err = tk.Label(ci_entry.master.master, text="ngày tháng không hợp lệ",
+                            font=self.F_LABEL, bg=self.C_CARD_BG, fg="#E74C3C")
+        def _validate_dates(_event=None):
+            ci = ci_entry.get()
+            co = co_entry.get()
+            ci_ph = self.placeholders.get("check_in", "")
+            co_ph = self.placeholders.get("check_out", "")
+            if ci == ci_ph or co == co_ph or not ci.strip() or not co.strip():
+                self._date_err.pack_forget()
+                return
+            try:
+                ci_dt = self._parse_datetime(ci)
+                co_dt = self._parse_datetime(co)
+                if ci_dt.date() < datetime.now().date():
+                    self._date_err.pack(anchor="w")
+                elif co_dt <= ci_dt:
+                    self._date_err.pack(anchor="w")
+                else:
+                    self._date_err.pack_forget()
+            except ValueError:
+                self._date_err.pack(anchor="w")
+        ci_entry.bind("<KeyRelease>", _validate_dates, add="+")
+        ci_entry.bind("<<Paste>>", _validate_dates, add="+")
+        co_entry.bind("<KeyRelease>", _validate_dates, add="+")
+        co_entry.bind("<<Paste>>", _validate_dates, add="+")
 
         # Confirm button (rounded via Canvas)
         btn_h = int(46 * s)
@@ -933,6 +1109,10 @@ class BookingDashboard(tk.Tk):
         btn_cv.bind("<Configure>", _draw_confirm_btn)
         btn_cv.bind("<Button-1>", self._on_confirm)
 
+        # Error label (hidden by default, shows red text on validation failure)
+        self._confirm_err = tk.Label(form_frame, text="", font=self.F_LABEL,
+                                     bg=self.C_CARD_BG, fg="#E74C3C")
+        self._confirm_err.pack(pady=(0, int(10*s)))
 
         # === BOTTOM BANNER (image + text overlay) ===
         _dir = os.path.dirname(__file__)
@@ -958,6 +1138,110 @@ class BookingDashboard(tk.Tk):
                                       text='"Until one has loved an animal,\na part of one\'s soul remains unawakened"',
                                       font=quote_font, fill="white", anchor="nw", tags="banner")
         banner_cv.bind("<Configure>", _draw_banner)
+
+    # =====================================================
+    # PRICE HELPERS
+    # =====================================================
+    def _price_text(self):
+        room_type = self.choice_vars["room_type"].get()
+        try:
+            price = self.backend.get_room_type_price(room_type)
+        except Exception:
+            price = None
+        if price is None:
+            defaults = {"Small Dog Room": 875000, "Medium Dog Room": 950000,
+                        "Large Dog Room": 1050000, "Cat Room": 800000, "Family Room": 1500000}
+            price = defaults.get(room_type, 875000)
+        return f"{int(price):,}đ"
+
+    def _on_room_type_changed(self, *_args):
+        if self._price_label:
+            self._price_label.config(text=self._price_text())
+        room_type = self.choice_vars["room_type"].get()
+        try:
+            rooms = self.backend.get_available_rooms(room_type)
+        except Exception:
+            rooms = []
+        self._rebuild_room_chips(rooms)
+
+    def _service_price_text(self):
+        service_name = self.choice_vars["service"].get()
+        qty = getattr(self, "service_quantity_var", None)
+        qty_val = qty.get() if qty else 1
+        try:
+            price = self.backend.get_service_price(service_name)
+        except Exception:
+            price = None
+        if price is None:
+            defaults = {"grooming": 150000, "daycare": 120000,
+                        "pickup": 50000, "dropoff": 50000,
+                        "swimming": 100000, "walk": 80000}
+            price = defaults.get(service_name, 150000)
+        total = price * qty_val
+        return f"{int(total):,}đ"
+
+    def _on_service_changed(self, *_args):
+        self._update_service_price_display()
+
+    def _update_service_price_display(self):
+        if hasattr(self, "_service_price_label") and self._service_price_label:
+            self._service_price_label.config(text=self._service_price_text())
+
+    def _rebuild_room_chips(self, rooms):
+        s = self._s
+        for w in self._room_chips_inner.winfo_children():
+            w.destroy()
+
+        if not rooms:
+            self._room_chips_container.pack_forget()
+            return
+
+        self._selected_room_var.set("")
+        self._room_chips = []
+        chip_frame = tk.Frame(self._room_chips_inner, bg=self.C_CARD_BG)
+        chip_frame.pack(anchor="w")
+        per_row = 5
+
+        for i, rid in enumerate(rooms):
+            if i > 0 and i % per_row == 0:
+                chip_frame = tk.Frame(self._room_chips_inner, bg=self.C_CARD_BG)
+                chip_frame.pack(anchor="w", pady=(int(4*s), 0))
+
+            chip_h = int(36 * s)
+            chip_w = int(80 * s)
+            cv = tk.Canvas(chip_frame, width=chip_w, height=chip_h,
+                           bg=self.C_CARD_BG, highlightthickness=0)
+            cv.pack(side=tk.LEFT, padx=(0, int(8*s)))
+
+            def draw_chip(cv=cv, rid=rid):
+                cv.delete("all")
+                r = chip_h // 2
+                active = (self._selected_room_var.get() == rid)
+                if active:
+                    # Match active capsule: fill with C_ACTIVE, white text
+                    _round_rect(cv, 0, 0, chip_w, chip_h, radius=r, fill=self.C_ACTIVE)
+                    cv.create_text(chip_w//2, chip_h//2, text=rid,
+                                   font=self.F_BTN, fill="white")
+                else:
+                    _round_rect(cv, 0, 0, chip_w, chip_h, radius=r,
+                                fill=self.C_CHIP_BORDER)
+                    _round_rect(cv, 1, 1, chip_w-1, chip_h-1, radius=max(1, r-1),
+                                fill=self.C_WHITE, outline="")
+                    cv.create_text(chip_w//2, chip_h//2, text=rid,
+                                   font=self.F_BTN, fill=self.C_TEXT_LIGHT)
+
+            draw_chip()
+            self._room_chips.append(draw_chip)
+
+            def on_click(_e=None, rid=rid):
+                self._selected_room_var.set(rid)
+                for fn in self._room_chips:
+                    fn()
+
+            cv.bind("<Button-1>", lambda e, rid=rid: on_click(rid=rid))
+
+        self._room_chips_container.pack(fill=tk.X, padx=int(36*s),
+                                        pady=(0, int(10*s)))
 
     # =====================================================
     # FORM HELPERS
@@ -1050,7 +1334,11 @@ class BookingDashboard(tk.Tk):
             win = tk.Toplevel(self)
             win.wm_overrideredirect(True)
             win.configure(bg=self.C_BORDER)
-            win.attributes("-topmost", True)
+            try:
+                win.attributes("-topmost", True)
+                win.attributes("-focusable", False)
+            except tk.TclError:
+                pass
 
             lb = tk.Listbox(win, font=self.F_INPUT, relief=tk.FLAT,
                             bg="white", fg=self.C_TEXT,
@@ -1078,6 +1366,7 @@ class BookingDashboard(tk.Tk):
                     entry.config(fg=self.C_TEXT)
                     entry.event_generate("<<AutocompleteConfirm>>")
                     hide()
+                    entry.focus_set()
 
             lb.bind("<ButtonRelease-1>", on_click)
             state["win"] = win
@@ -1105,6 +1394,7 @@ class BookingDashboard(tk.Tk):
                 entry.config(fg=self.C_TEXT)
             entry.event_generate("<<AutocompleteConfirm>>")
             hide()
+            entry.focus_set()
 
         def on_keyrelease(event):
             if event.keysym == "Down":
@@ -1257,13 +1547,15 @@ class BookingDashboard(tk.Tk):
             "behaviour_note": self._entry_value("behaviour_note"),
             "special_requirement": self._entry_value("special_requirement"),
             "room_type": self.choice_vars["room_type"].get(),
-            "room": self._entry_value("room"),
-            "service": self._entry_value("service"),
+            "room": self._selected_room_var.get().replace("R-", "").strip(),
+            "service": self.choice_vars["service"].get(),
+            "service_quantity": self.service_quantity_var.get() if hasattr(self, "service_quantity_var") else 1,
             "check_in": self._entry_value("check_in"),
             "check_out": self._entry_value("check_out"),
         }
 
     def _on_confirm(self, _event=None):
+        self._confirm_err.config(text="")
         try:
             result = self.backend.create_booking(self._collect_form_data())
             messagebox.showinfo(
@@ -1276,7 +1568,7 @@ class BookingDashboard(tk.Tk):
                 parent=self,
             )
         except Exception as exc:
-            messagebox.showerror("Booking failed", str(exc), parent=self)
+            self._confirm_err.config(text="⚠ Thông tin không hợp lệ")
 
 
 if __name__ == "__main__":
