@@ -635,9 +635,13 @@ class ReportDashboard(AppWindow):
         self.attributes("-fullscreen", True)
         self.configure(bg="#F5C97A")
         self.update_idletasks()
-
+        # Obtain window size; fall back to screen size if values look invalid
         self.W = self.winfo_width()
         self.H = self.winfo_height()
+        if (not isinstance(self.W, (int, float))) or self.W < 200:
+            self.W = self.winfo_screenwidth()
+        if (not isinstance(self.H, (int, float))) or self.H < 200:
+            self.H = self.winfo_screenheight()
         self.BASE_W = 1200.0
         self.BASE_H = 850.0
         self._s = self.W / self.BASE_W
@@ -1021,10 +1025,14 @@ class ReportDashboard(AppWindow):
         _dir = os.path.dirname(__file__)
 
         # ── HEADER BAR ──
-        _round_rect(cv, cx0, 30 + y, cx1, 68 + y, radius=20, fill=self.C_WHITE)
-        cv.create_text(cx0 + 30, 49 + y, text="Report",
+        header_y1 = 30 + y
+        header_y2 = 70 + y
+        header_cy = (header_y1 + header_y2) // 2
+        _round_rect(cv, cx0, header_y1, cx1, header_y2,
+                    radius=20, fill=self.C_WHITE)
+        cv.create_text(cx0 + 30, header_cy, text="Report",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
-        cv.create_text(cx0 + 115, 49 + y,
+        cv.create_text(cx0 + 115, header_cy,
                        text=self.report_data["today"],
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
@@ -1205,7 +1213,13 @@ class ReportDashboard(AppWindow):
                        font=self.F_SECTION, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = disc_y + 24
-        tbl_y2 = tbl_y1 + 130
+        # Compute table height dynamically based on number of discount rows to avoid overflow
+        disc_data = self.report_data["discounts"]
+        row_h = 36
+        min_table_h = 130
+        # header area + at least one row + bottom padding
+        computed_h = 24 + (len(disc_data) if disc_data else 1) * row_h + 24
+        tbl_y2 = tbl_y1 + max(min_table_h, computed_h)
         _round_rect(cv, cx0, tbl_y1, cx1, tbl_y2, radius=18, fill=self.C_WHITE)
 
         cols   = ["Booking", "Customer", "Original", "Discount", "Type", "Final Paid"]
@@ -1218,8 +1232,7 @@ class ReportDashboard(AppWindow):
         cv.create_line(cx0 + 15, hdr_y + 18, cx1 - 15, hdr_y + 18,
                        fill=self.C_DIVIDER, width=1)
 
-        disc_data = self.report_data["discounts"]
-        row_h = 36
+        # disc_data and row_h already defined above
         if not disc_data:
             cv.create_text((cx0 + cx1) // 2, hdr_y + 48,
                            text="No discounts in this period",

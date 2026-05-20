@@ -438,20 +438,26 @@ class StaffDashboard(AppWindow):
         s  = self._s
 
         # ── HEADER BAR ──
-        _round_rect(cv, 302 + dx, 30 + y, 1169 + dx, 70 + y, radius=20, fill=self.C_WHITE)
-        cv.create_text(332 + dx, 50 + y, text="Staff",
+        header_x1 = 300 + dx
+        header_y1 = 30 + y
+        header_x2 = 1150 + dx
+        header_y2 = 70 + y
+        header_cy = (header_y1 + header_y2) // 2
+        _round_rect(cv, header_x1, header_y1, header_x2, header_y2,
+                    radius=20, fill=self.C_WHITE)
+        cv.create_text(header_x1 + 30, header_cy, text="Staff",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
-        cv.create_text(402 + dx, 50 + y, text="Employee",
+        cv.create_text(header_x1 + 100, header_cy, text="Employee",
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
-        cv.create_text(512 + dx, 50 + y,
+        cv.create_text(header_x1 + 210, header_cy,
                        text=datetime.now().strftime("%d/%m/%Y"),
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # Clock in button (dark pill, right side of header)
         ci_w, ci_h = 150, 38
-        ci_x2 = 1169 + dx
+        ci_x2 = header_x2
         ci_x1 = ci_x2 - ci_w
-        ci_y1 = 31 + y
+        ci_y1 = header_cy - ci_h // 2
         ci_y2 = ci_y1 + ci_h
         
         is_clocked_in = self.staff_data.get("is_clocked_in", False)

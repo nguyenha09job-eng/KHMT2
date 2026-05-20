@@ -289,6 +289,63 @@ class BillingBackend:
         )
         return [self._format_booking(row, "Due today") for row in rows or []]
 
+    def get_upcoming_unpaid(self, search_query="", limit=20):
+        search_query = str(search_query or "").strip()
+        search_clause = ""
+        params = []
+        if search_query:
+            search_clause = """
+                AND (
+                    c.full_name LIKE %s
+                    OR c.phone LIKE %s
+                    OR p.pet_name LIKE %s
+                    OR CAST(b.booking_id AS CHAR) LIKE %s
+                )
+            """
+            term = f"%{search_query}%"
+            params.extend([term, term, term, term])
+        params.append(limit)
+
+        rows = self.db.fetch_all(
+            f"""
+            SELECT
+                b.booking_id,
+                c.full_name,
+                c.phone,
+                c.district,
+                p.pet_name,
+                p.species,
+                r.room_id,
+                rt.type_name,
+                b.check_in,
+                b.check_out,
+                b.room_price,
+                bs.status_name,
+                bl.payment_id,
+                bl.total_amount,
+                bl.discount_amount,
+                bl.payment_date,
+                bl.payment_method_id,
+                pm.method_name
+            FROM bookings b
+            JOIN customers c ON c.customer_id = b.customer_id
+            JOIN pets p ON p.pet_id = b.pet_id
+            JOIN rooms r ON r.room_id = b.room_id
+            JOIN room_types rt ON rt.room_type_id = r.room_type_id
+            JOIN booking_statuses bs ON bs.status_id = b.booking_status_id
+            LEFT JOIN billing bl ON bl.booking_id = b.booking_id
+            LEFT JOIN payment_methods pm ON pm.method_id = bl.payment_method_id
+            WHERE DATE(b.check_out) >= CURDATE()
+              AND bs.status_name IN ('booked', 'checked_in')
+              AND (bl.payment_id IS NULL OR bl.payment_method_id IS NULL)
+              {search_clause}
+            ORDER BY b.check_out, b.booking_id
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        return [self._format_booking(row, "Upcoming unpaid") for row in rows or []]
+
     def get_history(self, limit=4, search_query=""):
         rows = self.get_unpaid_today(search_query, limit)
         history = []
@@ -305,9 +362,18 @@ class BillingBackend:
 
     def get_data(self, search_query=""):
         unpaid_today = self.get_unpaid_today(search_query)
+        rows = unpaid_today
+        list_title = "Unpaid Billings Today"
+        empty_message = "No unpaid billing found for today"
+        if not rows:
+            rows = self.get_upcoming_unpaid(search_query)
+            list_title = "Upcoming Unpaid Billings"
+            empty_message = "No unpaid billing found"
         return {
             "today": date.today().strftime("%A, %d/%m/%Y"),
-            "focus": unpaid_today[0] if unpaid_today else None,
+            "focus": rows[0] if rows else None,
+            "list_title": list_title,
+            "empty_message": empty_message,
             "history": [
                 {
                     "booking_id": row.get("booking_id"),
@@ -317,7 +383,7 @@ class BillingBackend:
                     "method": self.METHOD_NAMES.get(row.get("method_key"), "Card"),
                     "status": row.get("status", "Unpaid"),
                 }
-                for row in unpaid_today
+                for row in rows
             ],
         }
 
@@ -397,7 +463,13 @@ class BillingDashboard(AppWindow):
         try:
             self.data = self.backend.get_data(self.search_var.get())
         except Exception as exc:
-            self.data = {"today": date.today().strftime("%A, %d/%m/%Y"), "focus": None, "history": []}
+            self.data = {
+                "today": date.today().strftime("%A, %d/%m/%Y"),
+                "focus": None,
+                "history": [],
+                "list_title": "Unpaid Billings Today",
+                "empty_message": "No unpaid billing found",
+            }
             self.data_error = str(exc)
         else:
             self.data_error = None
@@ -495,7 +567,13 @@ class BillingDashboard(AppWindow):
             self.data = self.backend.get_data(self.search_var.get())
             self.data_error = None
         except Exception as exc:
-            self.data = {"today": date.today().strftime("%A, %d/%m/%Y"), "focus": None, "history": []}
+            self.data = {
+                "today": date.today().strftime("%A, %d/%m/%Y"),
+                "focus": None,
+                "history": [],
+                "list_title": "Unpaid Billings Today",
+                "empty_message": "No unpaid billing found",
+            }
             self.data_error = str(exc)
         focus = self.data.get("focus") or {}
         self.selected_method = focus.get("method_key", self.selected_method)
@@ -888,7 +966,8 @@ class BillingDashboard(AppWindow):
         # 5. UNPAID BILLING LIST
         # -------------------------------------------------
         hist_y = card_y2 + 40
-        cv.create_text(L_PAD, hist_y, text="Unpaid Billings Today", font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
+        cv.create_text(L_PAD, hist_y, text=self.data.get("list_title", "Unpaid Billings Today"),
+                       font=self.F_TITLE_MED, fill=self.C_TEXT, anchor="w")
 
         tbl_y1 = hist_y + 20
         row_count = max(len(history), 1)
@@ -906,7 +985,8 @@ class BillingDashboard(AppWindow):
 
         row_y = h_y + 40
         if not history:
-            cv.create_text((L_PAD + R_PAD) / 2, row_y, text="No unpaid billing found for today",
+            cv.create_text((L_PAD + R_PAD) / 2, row_y,
+                           text=self.data.get("empty_message", "No unpaid billing found"),
                            font=self.F_REGULAR, fill=self.C_TEXT_LIGHT)
         for i, item in enumerate(history):
             cv.create_text(cols_x[0], row_y, text=str(item["booking_id"]), font=self.F_REGULAR, fill=self.C_TEXT, anchor="w")

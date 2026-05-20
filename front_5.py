@@ -400,10 +400,16 @@ class RoomsDashboard(AppWindow):
             }
 
         # ── HEADER BAR ──
-        _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 68 + y, radius=20, fill=self.C_WHITE)
-        cv.create_text(330 + dx, 49 + y, text="Rooms",
+        header_x1 = 300 + dx
+        header_y1 = 30 + y
+        header_x2 = 1150 + dx
+        header_y2 = 70 + y
+        header_cy = (header_y1 + header_y2) // 2
+        _round_rect(cv, header_x1, header_y1, header_x2, header_y2,
+                    radius=20, fill=self.C_WHITE)
+        cv.create_text(header_x1 + 30, header_cy, text="Rooms",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
-        cv.create_text(420 + dx, 49 + y,
+        cv.create_text(header_x1 + 120, header_cy,
                        text=(f"{summary['occupied']} occupied  -  "
                              f"{summary['available']} available  -  "
                              f"{summary['cleaning']} cleaning"),

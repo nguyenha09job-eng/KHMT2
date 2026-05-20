@@ -366,10 +366,16 @@ class CustomerPetDashboard(AppWindow):
         y  = self.Y_OFF
 
         # ── HEADER BAR ──
-        _round_rect(cv, 300 + dx, 30 + y, 1150 + dx, 68 + y, radius=20, fill=self.C_WHITE)
-        cv.create_text(330 + dx, 49 + y, text="Customer & Pet",
+        header_x1 = 300 + dx
+        header_y1 = 30 + y
+        header_x2 = 1150 + dx
+        header_y2 = 70 + y
+        header_cy = (header_y1 + header_y2) // 2
+        _round_rect(cv, header_x1, header_y1, header_x2, header_y2,
+                    radius=20, fill=self.C_WHITE)
+        cv.create_text(header_x1 + 30, header_cy, text="Customer & Pet",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
-        cv.create_text(510 + dx, 49 + y,
+        cv.create_text(header_x1 + 210, header_cy,
                        text=datetime.now().strftime("%A, %d/%m/%Y"),
                        font=self.F_TABLE_HEAD, fill=self.C_TEXT_LIGHT, anchor="w")
 

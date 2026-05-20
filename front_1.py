@@ -614,7 +614,7 @@ class PetDashboard(AppWindow):
         _round_rect(cv, 300+dx, 30+y_off, 1150+dx, 70+y_off, radius=20, fill=self.C_WHITE, outline="")
         cv.create_text(330+dx, 50+y_off, text="Dashboard", font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
         today_str = datetime.now().strftime("%A, %d/%m/%Y")
-        cv.create_text(460+dx, 52+y_off, text=today_str, font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
+        cv.create_text(460+dx, 50+y_off, text=today_str, font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # New Booking button
         _round_rect(cv, 960+dx, 30+y_off, 1150+dx, 70+y_off, radius=20,

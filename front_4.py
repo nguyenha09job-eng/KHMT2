@@ -441,20 +441,34 @@ class BookingHistory(AppWindow):
 
 
         # ── HEADER BAR ──
-        _round_rect(cv, 300 + dx, 25 + y, 1150 + dx, 75 + y, radius=20, fill=self.C_WHITE)
-        cv.create_text(330 + dx, 50 + y, text="Booking",
+        header_x1 = 300 + dx
+        header_y1 = 25 + y
+        header_x2 = 1150 + dx
+        header_y2 = 65 + y
+        header_h = header_y2 - header_y1
+        header_cy = (header_y1 + header_y2) // 2
+        _round_rect(cv, header_x1, header_y1, header_x2, header_y2,
+                    radius=header_h // 2, fill=self.C_WHITE)
+        cv.create_text(header_x1 + 30, header_cy, text="Booking",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
         today_str = datetime.now().strftime("%A, %d/%m/%Y")
-        cv.create_text(430 + dx, 50 + y, text=today_str,
+        cv.create_text(header_x1 + 135, header_cy, text=today_str,
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
 
-        # Toggle: Bookings | History  (History = active/dark)
-        # Active "History" pill (enlarged for better spacing and aesthetics)
-        _round_rect(cv, 995 + dx, 28 + y, 1147 + dx, 72 + y, radius=22, fill=self.C_TEXT)
-        cv.create_text(935 + dx, 50 + y, text="Bookings",
+        # Toggle: Bookings | History
+        tw = 95
+        tx = header_x2 - 12 - tw * 2
+        tg_y1 = header_y1 + 3
+        tg_y2 = header_y2 - 3
+        tg_h = tg_y2 - tg_y1
+        _round_rect(cv, tx, tg_y1, tx + tw, tg_y2, radius=tg_h // 2,
+                    fill=self.C_WHITE, tags="bookings_toggle")
+        cv.create_text(tx + tw // 2, header_cy, text="Bookings",
                        font=self.F_TOGGLE_BTN, fill=self.C_TEXT, tags="bookings_toggle")
-        cv.create_text(1071 + dx, 50 + y, text="History",
+        _round_rect(cv, tx + tw, tg_y1, tx + tw * 2, tg_y2,
+                    radius=tg_h // 2, fill=self.C_TEXT)
+        cv.create_text(tx + tw + tw // 2, header_cy, text="History",
                        font=self.F_TOGGLE_BTN, fill=self.C_WHITE)
         bind_click(cv, "bookings_toggle",
                    lambda _e: switch_to(self, "Booking", "Booking History"))

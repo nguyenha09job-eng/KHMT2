@@ -204,6 +204,7 @@ class CareViewDashboard(AppWindow):
         self.draw_sidebar()
         self.draw_header()
         self.draw_banner()
+        self.draw_status_filters()
         self.draw_pet_cards(self.get_filtered_pets())
 
         # Scale
@@ -249,11 +250,24 @@ class CareViewDashboard(AppWindow):
     def get_filtered_pets(self):
         if self.current_filter == "Dog":
             return [p for p in self.pets if p["type"] == "Dog"]
-        elif self.current_filter == "Cat":
+        if self.current_filter == "Cat":
             return [p for p in self.pets if p["type"] == "Cat"]
-        elif self.current_filter == "Needs Attention":
+        if self.current_filter == "Needs Attention":
             return [p for p in self.pets if p["need"]]
+        if self.current_filter == "Done":
+            return [p for p in self.pets if self._status_filter_value(p) == "Done"]
+        if self.current_filter == "Not Done":
+            return [p for p in self.pets if self._status_filter_value(p) == "Not Done"]
         return self.pets
+
+    @staticmethod
+    def _status_filter_value(pet):
+        status = str(pet.get("status") or "None")
+        if status == "Done":
+            return "Done"
+        if status == "None":
+            return "None"
+        return "Not Done"
 
     def set_filter(self, filter_name):
         self.current_filter = filter_name
@@ -262,6 +276,7 @@ class CareViewDashboard(AppWindow):
         self.canvas.delete("all")
         self.draw_header()
         self.draw_banner()
+        self.draw_status_filters()
         self.draw_pet_cards(self.get_filtered_pets())
         self.canvas.scale("all", 0, 0, self._s, self._s)
         self.canvas.update_idletasks()
@@ -510,10 +525,10 @@ class CareViewDashboard(AppWindow):
                     fill=self.C_WHITE, outline="")
         cv.create_text(330+dx, 50+y_off, text="Care View",
                        font=self.F_TITLE, fill=self.C_TEXT, anchor="w")
-        cv.create_text(460+dx, 52+y_off, text=datetime.now().strftime("%A, %d/%m/%Y"),
+        cv.create_text(460+dx, 50+y_off, text=datetime.now().strftime("%A, %d/%m/%Y"),
                        font=self.F_DATE, fill=self.C_TEXT_LIGHT, anchor="w")
 
-        # Filter buttons: All, Dog, Cat, Needs Attention
+        # Filter buttons
         filters = [
             ("All", 80, "All"),
             ("Dog", 70, "Dog"),
@@ -538,6 +553,8 @@ class CareViewDashboard(AppWindow):
                                fill=self.C_TEXT, tags=(tag_btn,))
             cv.tag_bind(tag_btn, "<Button-1>",
                         lambda e, name=label: self.set_filter(name))
+            cv.tag_bind(tag_btn, "<Enter>", lambda e: cv.config(cursor="hand2"))
+            cv.tag_bind(tag_btn, "<Leave>", lambda e: cv.config(cursor=""))
             fx += fw + 12
 
     # =====================================================
@@ -560,6 +577,31 @@ class CareViewDashboard(AppWindow):
                        text='"Sometimes the smallest things take up the\nmost room in your heart."',
                        font=self.F_QUOTE, fill=self.C_WHITE, anchor="w", justify="left")
 
+    def draw_status_filters(self):
+        cv = self.canvas
+        dx = -self.BASE_SIDE_W
+        y_off = self.Y_OFF
+        y = 298 + y_off
+        filters = [
+            ("Done", 76, "Done"),
+            ("Not Done", 104, "Not Done"),
+        ]
+        fx = 300 + dx
+        for label, fw, tag in filters:
+            is_active = (self.current_filter == label)
+            tag_btn = f"status_filter_{tag.replace(' ', '_')}"
+            fill = self.C_TEXT if is_active else self.C_WHITE
+            text_fill = self.C_WHITE if is_active else self.C_TEXT
+            _round_rect(cv, fx, y, fx + fw, y + 30, radius=15,
+                        fill=fill, outline="", tags=(tag_btn,))
+            cv.create_text(fx + fw / 2, y + 15, text=label,
+                           font=self.F_FILTER, fill=text_fill, tags=(tag_btn,))
+            cv.tag_bind(tag_btn, "<Button-1>",
+                        lambda e, name=label: self.set_filter(name))
+            cv.tag_bind(tag_btn, "<Enter>", lambda e: cv.config(cursor="hand2"))
+            cv.tag_bind(tag_btn, "<Leave>", lambda e: cv.config(cursor=""))
+            fx += fw + 10
+
     # =====================================================
     # PET CARDS GRID (3 columns)
     # =====================================================
@@ -569,9 +611,9 @@ class CareViewDashboard(AppWindow):
         y_off = self.Y_OFF
 
         if not pets:
-            _round_rect(cv, 300+dx, 310+y_off, 1150+dx, 390+y_off, radius=24,
+            _round_rect(cv, 300+dx, 345+y_off, 1150+dx, 425+y_off, radius=24,
                         fill=self.C_CARD, outline="")
-            cv.create_text(725+dx, 350+y_off,
+            cv.create_text(725+dx, 385+y_off,
                            text="No checked-in pets found today",
                            font=self.F_TITLE, fill=self.C_TEXT)
             return
@@ -584,7 +626,7 @@ class CareViewDashboard(AppWindow):
         gap_x = 15
         gap_y = 20
         start_x = 300 + dx
-        start_y = 310 + y_off
+        start_y = 345 + y_off
 
         for idx, pet in enumerate(pets):
             col = idx % cols

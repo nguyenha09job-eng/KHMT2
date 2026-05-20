@@ -638,7 +638,12 @@ class BookingDashboard(AppWindow):
         # Scroll bindings - global capture to work over all child widgets
         def _on_mw_global(event):
             # Only scroll when cursor is in the content area (right of sidebar)
-            sidebar_right = self.side_frame.winfo_rootx() + self.side_frame.winfo_width()
+            try:
+                if not getattr(self, 'side_frame', None) or not self.side_frame.winfo_exists():
+                    return
+                sidebar_right = self.side_frame.winfo_rootx() + self.side_frame.winfo_width()
+            except Exception:
+                return
             if event.x_root >= sidebar_right:
                 if sys.platform == "darwin":
                     content_canvas.yview_scroll(int(-event.delta), "units")
@@ -1569,7 +1574,8 @@ class BookingDashboard(AppWindow):
                 parent=self,
             )
         except Exception as exc:
-            self._confirm_err.config(text="⚠ Thông tin không hợp lệ")
+            message = str(exc).strip() or "Thông tin không hợp lệ"
+            self._confirm_err.config(text=f"⚠ {message}")
 
 
 if __name__ == "__main__":

@@ -678,29 +678,30 @@ class StaffPage(AppWindow):
         # ══════════════════════════════════════════════════
         # 1.  HEADER BAR
         # ══════════════════════════════════════════════════
-        hbar_x1 = 302 + dx
+        hbar_x1 = 300 + dx
         hbar_y1 = 30  + y
-        hbar_x2 = 1169 + dx
+        hbar_x2 = 1150 + dx
         hbar_y2 = 70  + y
+        hbar_cy = (hbar_y1 + hbar_y2) // 2
         _round_rect(cv, hbar_x1, hbar_y1, hbar_x2, hbar_y2, radius=20, fill=self.C_WHITE)
 
         # "Staff" (bold) | Manager | date
-        cv.create_text(hbar_x1 + 30, (hbar_y1 + hbar_y2) // 2,
+        cv.create_text(hbar_x1 + 30, hbar_cy,
                        text="Staff", font=self.F_HEADER_TAB, fill=self.C_TEXT, anchor="w")
-        cv.create_text(hbar_x1 + 100, (hbar_y1 + hbar_y2) // 2,
+        cv.create_text(hbar_x1 + 100, hbar_cy,
                        text="Manager", font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT,
                        anchor="w", tags="staff_dashboard_link")
         bind_click(cv, "staff_dashboard_link",
                    lambda _e: switch_to(self, "Staff Dashboard", "Staff"))
         today_str = datetime.now().strftime("%d/%m/%Y")
-        cv.create_text(hbar_x1 + 210, (hbar_y1 + hbar_y2) // 2,
+        cv.create_text(hbar_x1 + 210, hbar_cy,
                        text=today_str, font=self.F_HEADER_LIGHT, fill=self.C_TEXT_LIGHT, anchor="w")
 
         # "+ New staff" dark pill button (right side)
         nbtn_w, nbtn_h = 190, 40
         nbtn_x2 = hbar_x2            # flush với cạnh phải header
         nbtn_x1 = nbtn_x2 - nbtn_w
-        nbtn_cy = (hbar_y1 + hbar_y2) // 2
+        nbtn_cy = hbar_cy
         nbtn_y1 = nbtn_cy - nbtn_h // 2
         nbtn_y2 = nbtn_cy + nbtn_h // 2
         _round_rect(cv, nbtn_x1, nbtn_y1, nbtn_x2, nbtn_y2,
